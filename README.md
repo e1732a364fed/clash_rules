@@ -1,8 +1,14 @@
-This project can parse the rules and rule-sets in Clash’s YAML configuration files and provides an optimized matching algorithm.
+This project can parse the rules and rule-sets in Clash’s YAML configuration files and provides optimized blazingly fast  matching algorithms.
+
 The project uses functional programming.
 
-DOMAIN-SUFFIX, IP-CIDR(6) uses radix trie ，DOMAIN-KEYWORD uses Aho-Corasick Automaton.
+DOMAIN-SUFFIX, IP-CIDR(6) uses radix trie, DOMAIN-KEYWORD uses Aho-Corasick Automaton.
 DOMAIN-REGEX uses RegexSet. PORT uses binary search.
+
+In general the algorithms are about 40x times faster than the unoptimized ones. If the cpu supports simd, DOMAIN-KEYWORD can speed up about 80x.
+
+You can run `cargo bench` to test how fast the algorithm is on your machine.
+
 
 For examples, see the test at the end of the lib.rs and benches/algorithms.
 
