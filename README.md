@@ -1,3 +1,8 @@
+# Clash Rules &emsp; [![Latest Version]][crates.io]
+
+[Latest Version]: https://img.shields.io/crates/v/clash_rules.svg
+[crates.io]: https://crates.io/crates/clash_rules
+
 This project can parse the rules and rule-sets in Clash’s YAML configuration files and provides optimized blazingly fast  matching algorithms.
 
 The project uses functional programming.
