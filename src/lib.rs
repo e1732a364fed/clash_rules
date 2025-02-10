@@ -104,21 +104,22 @@ fn ipv4net_to_vec(ipnet: &Ipv4Net) -> Vec<u8> {
     )
 }
 #[derive(PartialEq, Eq, Debug)]
-pub struct MyIpv4Net(pub Ipv4Net);
-impl radix_trie::TrieKey for MyIpv4Net {
+struct Ipv4NetWrapper(pub Ipv4Net);
+impl radix_trie::TrieKey for Ipv4NetWrapper {
     fn encode_bytes(&self) -> Vec<u8> {
         ipv4net_to_vec(&self.0)
     }
 }
-pub fn get_ip_trie2(map: &HashMap<&str, Vec<&str>>) -> Trie<MyIpv4Net, usize> {
-    let mut trie = Trie::<MyIpv4Net, usize>::new();
+pub struct IpTrie2(Trie<Ipv4NetWrapper, usize>);
+pub fn get_ip_trie2(map: &HashMap<&str, Vec<&str>>) -> IpTrie2 {
+    let mut trie = Trie::<Ipv4NetWrapper, usize>::new();
     for (i, (_key, value)) in map.iter().enumerate() {
         for v in value {
             let r: Ipv4Net = v.parse().unwrap();
-            trie.insert(MyIpv4Net(r), i);
+            trie.insert(Ipv4NetWrapper(r), i);
         }
     }
-    trie
+    IpTrie2(trie)
 }
 pub fn get_ip6_trie(map: &HashMap<&str, Vec<&str>>) -> PrefixMap<Ipv6Net, usize> {
     let mut trie = PrefixMap::<Ipv6Net, usize>::new();
@@ -212,9 +213,9 @@ pub fn check_suffix_trie(trie: &Trie<String, usize>, s: &str) -> Option<usize> {
         None
     }
 }
-pub fn check_ip_trie2(trie: &Trie<MyIpv4Net, usize>, addr: Ipv4Addr) -> Option<usize> {
-    let ipn = MyIpv4Net(Ipv4Net::new(addr, 32).unwrap());
-    if let Some(subtree) = trie.get_ancestor(&ipn) {
+pub fn check_ip_trie2(trie: &IpTrie2, addr: Ipv4Addr) -> Option<usize> {
+    let ipn = Ipv4NetWrapper(Ipv4Net::new(addr, 32).unwrap());
+    if let Some(subtree) = trie.0.get_ancestor(&ipn) {
         subtree.value().cloned()
     } else {
         None
