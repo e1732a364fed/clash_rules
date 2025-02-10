@@ -5,10 +5,19 @@ pub use serde_yaml_ng;
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+pub const DOMAIN: &str = "DOMAIN";
+pub const DOMAIN_SUFFIX: &str = "DOMAIN-SUFFIX";
+pub const DOMAIN_KEYWORD: &str = "DOMAIN-KEYWORD";
+pub const IP_CIDR: &str = "IP-CIDR";
+pub const IP_CIDR6: &str = "IP-CIDR6";
+pub const PROCESS_NAME: &str = "PROCESS-NAME";
+pub const GEOIP: &str = "GEOIP";
+pub const MATCH: &str = "MATCH";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RuleSet {
@@ -18,6 +27,14 @@ pub struct RuleSet {
 pub enum LoadYamlFileError {
     FileErr(std::io::Error),
     YamlErr(serde_yaml_ng::Error),
+}
+impl Display for LoadYamlFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadYamlFileError::FileErr(error) => write!(f, "{}", error),
+            LoadYamlFileError::YamlErr(error) => write!(f, "{}", error),
+        }
+    }
 }
 
 impl From<std::io::Error> for LoadYamlFileError {
@@ -127,27 +144,27 @@ pub fn merge_method_rules_map(
 pub fn get_domain_rules(
     method_rules_map: &HashMap<String, Vec<Vec<String>>>,
 ) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get("DOMAIN")
+    method_rules_map.get(DOMAIN)
 }
 pub fn get_suffix_rules(
     method_rules_map: &HashMap<String, Vec<Vec<String>>>,
 ) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get("DOMAIN-SUFFIX")
+    method_rules_map.get(DOMAIN_SUFFIX)
 }
 pub fn get_keyword_rules(
     method_rules_map: &HashMap<String, Vec<Vec<String>>>,
 ) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get("DOMAIN-KEYWORD")
+    method_rules_map.get(DOMAIN_KEYWORD)
 }
 pub fn get_ip_cidr_rules(
     method_rules_map: &HashMap<String, Vec<Vec<String>>>,
 ) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get("IP-CIDR")
+    method_rules_map.get(IP_CIDR)
 }
 pub fn get_ip6_cidr_rules(
     method_rules_map: &HashMap<String, Vec<Vec<String>>>,
 ) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get("IP-CIDR6")
+    method_rules_map.get(IP_CIDR6)
 }
 
 /// for DOMAIN, PROCESS-NAME etc. that matches directly
@@ -268,14 +285,6 @@ pub fn gen_suffix_trie<T: AsRef<str>>(
     trie
 }
 
-/// basic hashmap matching
-pub fn get_target<'a, K, V>(item_target_map: &'a HashMap<K, V>, item: &K) -> Option<&'a V>
-where
-    K: AsRef<str> + Eq + std::hash::Hash,
-    V: AsRef<str> + Eq + std::hash::Hash,
-{
-    item_target_map.get(item)
-}
 pub fn check_suffix_dummy<'a, T>(
     target_suffix_map: &'a HashMap<T, Vec<T>>,
     domain: &str,
@@ -327,10 +336,10 @@ pub fn check_keyword_ac2<'a>(
     keyword_ac: &AhoCorasick,
     domain: &str,
     targets: &'a [String],
-) -> Option<&'a str> {
+) -> Option<&'a String> {
     if let Some(mat) = keyword_ac.find_iter(domain).next() {
         let keyword_index = mat.pattern();
-        return Some(targets[keyword_index].as_str());
+        return Some(&targets[keyword_index]);
     }
     None
 }
@@ -409,7 +418,7 @@ fn test() {
     let ac2_targets = get_keywords_targets(keyword_rules);
 
     let ds = get_test_domains();
-    for d in ds {
+    for d in &ds {
         let r = check_suffix_trie(&trie, d);
         println!("{:?}", r.map(|i| suffix_targets.get(i).unwrap()));
         let r = check_keyword_ac(&ac, d);
@@ -426,13 +435,163 @@ fn test() {
     let it2 = gen_ip_trie2(&ip_map);
 
     let ips = get_test_ips();
-    for ip in ips {
-        let r = check_ip_trie(&it, ip);
+    for ip in &ips {
+        let r = check_ip_trie(&it, *ip);
         println!("{:?}", r.map(|i| ip_targets.get(i).unwrap()));
-        let r = check_ip_trie2(&it2, ip);
+        let r = check_ip_trie2(&it2, *ip);
         println!("{:?}", r.map(|i| ip_targets.get(i).unwrap()));
     }
 
     let ip_rules = get_ip6_cidr_rules(&rule_map).unwrap();
     println!("{:?}", ip_rules.len());
+
+    let cm = ClashRuleMatcher::from_clash_config_file("test.yaml").unwrap();
+    for d in ds {
+        let r = cm.check_domain(d);
+        println!("{:?}", r);
+    }
+    for ip in ips {
+        let r = cm.check_ip(std::net::IpAddr::V4(ip));
+        println!("{:?}", r);
+    }
+}
+
+#[derive(Debug)]
+pub struct DomainKeywordMatcher {
+    pub ac: AhoCorasick,
+    pub targets: Vec<String>,
+}
+impl DomainKeywordMatcher {
+    pub fn check(&self, domain: &str) -> Option<&String> {
+        check_keyword_ac2(&self.ac, domain, &self.targets)
+    }
+}
+#[derive(Debug)]
+pub struct DomainSuffixMatcher {
+    pub trie: Trie<String, usize>,
+    pub targets: Vec<String>,
+}
+impl DomainSuffixMatcher {
+    pub fn check(&self, domain: &str) -> Option<&String> {
+        check_suffix_trie(&self.trie, domain).map(|i| self.targets.get(i).unwrap())
+    }
+}
+#[derive(Debug)]
+pub struct IpMatcher {
+    pub trie: PrefixMap<Ipv4Net, usize>,
+    pub targets: Vec<String>,
+}
+impl IpMatcher {
+    pub fn check(&self, ip: Ipv4Addr) -> Option<&String> {
+        check_ip_trie(&self.trie, ip).map(|i| self.targets.get(i).unwrap())
+    }
+}
+#[derive(Debug)]
+pub struct Ip6Matcher {
+    pub trie: PrefixMap<Ipv6Net, usize>,
+    pub targets: Vec<String>,
+}
+impl Ip6Matcher {
+    pub fn check(&self, ip: Ipv6Addr) -> Option<&String> {
+        check_ip6_trie(&self.trie, ip).map(|i| self.targets.get(i).unwrap())
+    }
+}
+
+/// convenient struct for checking all rules.
+#[derive(Debug, Default)]
+pub struct ClashRuleMatcher {
+    pub domain_target_map: Option<HashMap<String, String>>,
+    pub domain_keyword_matcher: Option<DomainKeywordMatcher>,
+    pub domain_suffix_matcher: Option<DomainSuffixMatcher>,
+    pub ip4_matcher: Option<IpMatcher>,
+    pub ip6_matcher: Option<Ip6Matcher>,
+
+    /// left_rules stores rules that not handled by the ClashRuleMatcher
+    pub left_rules: HashMap<String, Vec<Vec<String>>>,
+}
+
+impl ClashRuleMatcher {
+    pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
+        let mut method_rules_map = parse_rules(&load_rules_from_file(path)?);
+
+        let mut s = Self::default();
+
+        if let Some(v) = get_domain_rules(&method_rules_map) {
+            s.domain_target_map = Some(get_item_target_map(v));
+            method_rules_map.remove(DOMAIN);
+        }
+        if let Some(v) = get_keyword_rules(&method_rules_map) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let ac = gen_keywords_ac2(v);
+            s.domain_keyword_matcher = Some(DomainKeywordMatcher { ac, targets });
+            method_rules_map.remove(DOMAIN_KEYWORD);
+        }
+        if let Some(v) = get_suffix_rules(&method_rules_map) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_suffix_trie(&map);
+            s.domain_suffix_matcher = Some(DomainSuffixMatcher { trie, targets });
+            method_rules_map.remove(DOMAIN_SUFFIX);
+        }
+        if let Some(v) = get_ip_cidr_rules(&method_rules_map) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_ip_trie(&map);
+            s.ip4_matcher = Some(IpMatcher { trie, targets });
+            method_rules_map.remove(IP_CIDR);
+        }
+        if let Some(v) = get_ip6_cidr_rules(&method_rules_map) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_ip6_trie(&map);
+            s.ip6_matcher = Some(Ip6Matcher { trie, targets });
+            method_rules_map.remove(IP_CIDR6);
+        }
+        s.left_rules = method_rules_map;
+
+        Ok(s)
+    }
+
+    pub fn check_ip4(&self, ip: Ipv4Addr) -> Option<&String> {
+        if let Some(m) = &self.ip4_matcher {
+            m.check(ip)
+        } else {
+            None
+        }
+    }
+    pub fn check_ip6(&self, ip: Ipv6Addr) -> Option<&String> {
+        if let Some(m) = &self.ip6_matcher {
+            m.check(ip)
+        } else {
+            None
+        }
+    }
+    pub fn check_ip(&self, ip: std::net::IpAddr) -> Option<&String> {
+        match ip {
+            std::net::IpAddr::V4(ipv4_addr) => self.check_ip4(ipv4_addr),
+            std::net::IpAddr::V6(ipv6_addr) => self.check_ip6(ipv6_addr),
+        }
+    }
+    pub fn check_domain(&self, domain: &str) -> Option<&String> {
+        if let Some(m) = &self.domain_target_map {
+            let r = m.get(domain);
+            if r.is_some() {
+                return r;
+            }
+        }
+        if let Some(m) = &self.domain_suffix_matcher {
+            let r = m.check(domain);
+            if r.is_some() {
+                return r;
+            }
+        }
+        if let Some(m) = &self.domain_keyword_matcher {
+            let r = m.check(domain);
+            if r.is_some() {
+                return r;
+            }
+        }
+        None
+    }
 }

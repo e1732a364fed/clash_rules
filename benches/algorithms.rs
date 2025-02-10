@@ -87,7 +87,7 @@ fn bench_domain(c: &mut Criterion) {
         b.iter(|| {
             ds.iter().for_each(|d| {
                 if bloom.check(&d) {
-                    get_target(&map2, d);
+                    map2.get(d);
                 }
             });
         })
@@ -112,7 +112,7 @@ fn bench_domain(c: &mut Criterion) {
     c.bench_function("dummy2_domain", |b| {
         b.iter(|| {
             ds.iter().for_each(|d| {
-                get_target(&map2, d);
+                map2.get(d);
             });
         })
     });
