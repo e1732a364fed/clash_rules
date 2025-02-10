@@ -46,7 +46,7 @@ pub fn parse_rule_set_as_domain_suffix_trie(
 ) {
     for v in payload.iter() {
         let mut r: String = v.chars().rev().collect();
-        // RULESET 中 表示 suffix 的 字符串 有个 加号末尾
+        // RULESET 中 表示 suffix 的 字符串 有个 加号末尾（逆序后）
         r = r.trim_end_matches('+').to_string();
         trie.insert(r, target_id);
     }
@@ -172,7 +172,7 @@ pub fn get_target_item_map(rules: &[Vec<String>]) -> HashMap<String, Vec<String>
     map
 }
 
-pub fn get_keywords_ac(
+pub fn gen_keywords_ac(
     target_keywords_map: &HashMap<String, Vec<String>>,
 ) -> HashMap<String, AhoCorasick> {
     target_keywords_map
@@ -184,12 +184,12 @@ pub fn get_keywords_ac(
 pub fn get_keywords_targets(rules: &[Vec<String>]) -> Vec<String> {
     rules.iter().filter_map(|v| v.get(1).cloned()).collect()
 }
-pub fn get_keywords_ac2(rules: &[Vec<String>]) -> AhoCorasick {
+pub fn gen_keywords_ac2(rules: &[Vec<String>]) -> AhoCorasick {
     let result: Vec<String> = rules.iter().filter_map(|v| v.first().cloned()).collect();
 
     AhoCorasick::new(&result).unwrap()
 }
-pub fn get_ip_trie<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> PrefixMap<Ipv4Net, usize> {
+pub fn gen_ip_trie<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> PrefixMap<Ipv4Net, usize> {
     let mut trie = PrefixMap::<Ipv4Net, usize>::new();
     for (i, (_key, value)) in target_ip_map.iter().enumerate() {
         for v in value {
@@ -199,24 +199,25 @@ pub fn get_ip_trie<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> PrefixM
     }
     trie
 }
-fn u32_to_bit_u8_vec(n: u32, len: u8) -> Vec<u8> {
-    (32 - len..32u8).rev().map(|i| (n >> i) as u8).collect()
-}
-fn ipv4net_to_vec(ipnet: &Ipv4Net) -> Vec<u8> {
-    u32_to_bit_u8_vec(
-        u32::from_be_bytes(ipnet.network().octets()),
-        ipnet.prefix_len(),
-    )
-}
 #[derive(PartialEq, Eq, Debug)]
 struct Ipv4NetWrapper(pub Ipv4Net);
 impl radix_trie::TrieKey for Ipv4NetWrapper {
     fn encode_bytes(&self) -> Vec<u8> {
-        ipv4net_to_vec(&self.0)
+        fn u32_to_bit_u8_vec(n: u32, len: u8) -> Vec<u8> {
+            (32 - len..32u8).rev().map(|i| (n >> i) as u8).collect()
+        }
+        let ipnet = &self.0;
+        u32_to_bit_u8_vec(
+            u32::from_be_bytes(ipnet.network().octets()),
+            ipnet.prefix_len(),
+        )
     }
 }
+
+/// Trie struct for Ipv4Net using radix_trie::Trie, which is a bit slower than
+/// prefix_trie::PrifixMap
 pub struct IpTrie2(Trie<Ipv4NetWrapper, usize>);
-pub fn get_ip_trie2<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> IpTrie2 {
+pub fn gen_ip_trie2<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> IpTrie2 {
     let mut trie = Trie::<Ipv4NetWrapper, usize>::new();
     for (i, (_key, value)) in target_ip_map.iter().enumerate() {
         for v in value {
@@ -227,7 +228,7 @@ pub fn get_ip_trie2<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> IpTrie
     IpTrie2(trie)
 }
 /// the function store ips in the trie with their target index of the map
-pub fn get_ip6_trie<T: AsRef<str>>(
+pub fn gen_ip6_trie<T: AsRef<str>>(
     target_ip_map: &HashMap<T, Vec<T>>,
 ) -> PrefixMap<Ipv6Net, usize> {
     let mut trie = PrefixMap::<Ipv6Net, usize>::new();
@@ -240,7 +241,7 @@ pub fn get_ip6_trie<T: AsRef<str>>(
     trie
 }
 /// the function store domains in the trie with their target index of the map
-pub fn get_prefix_trie<T: AsRef<str>>(target_item_map: &HashMap<T, Vec<T>>) -> Trie<String, usize> {
+pub fn gen_prefix_trie<T: AsRef<str>>(target_item_map: &HashMap<T, Vec<T>>) -> Trie<String, usize> {
     let mut trie = Trie::new();
 
     for (i, (_key, value)) in target_item_map.iter().enumerate() {
@@ -253,7 +254,7 @@ pub fn get_prefix_trie<T: AsRef<str>>(target_item_map: &HashMap<T, Vec<T>>) -> T
 
 /// the function store domain chars in the result trie in reversed order, and
 /// with their target index of the map
-pub fn get_suffix_trie<T: AsRef<str>>(
+pub fn gen_suffix_trie<T: AsRef<str>>(
     target_suffix_map: &HashMap<T, Vec<T>>,
 ) -> Trie<String, usize> {
     let mut trie = Trie::new();
@@ -398,13 +399,13 @@ fn main() {
     let suffix_targets: Vec<&String> = suffix_map.keys().collect();
 
     println!("{:?}", suffix_targets);
-    let trie = get_suffix_trie(&suffix_map);
+    let trie = gen_suffix_trie(&suffix_map);
 
     let keyword_rules = get_keyword_rules(&rule_map).unwrap();
     println!("{:?}", keyword_rules.len());
     let kmap = get_target_item_map(keyword_rules);
-    let ac = get_keywords_ac(&kmap);
-    let ac2 = get_keywords_ac2(keyword_rules);
+    let ac = gen_keywords_ac(&kmap);
+    let ac2 = gen_keywords_ac2(keyword_rules);
     let ac2_targets = get_keywords_targets(keyword_rules);
 
     let ds = get_test_domains();
@@ -421,8 +422,8 @@ fn main() {
     println!("{:?}", ip_rules.len());
     let ip_map = get_target_item_map(ip_rules);
     let ip_targets: Vec<_> = ip_map.keys().collect();
-    let it = get_ip_trie(&ip_map);
-    let it2 = get_ip_trie2(&ip_map);
+    let it = gen_ip_trie(&ip_map);
+    let it2 = gen_ip_trie2(&ip_map);
 
     let ips = get_test_ips();
     for ip in ips {

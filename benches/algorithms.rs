@@ -123,7 +123,7 @@ fn bench_suffix(c: &mut Criterion) {
     let v = get_suffix_rules(&hashmap).unwrap();
     let map = get_target_item_map(v);
     let ds = get_test_domains();
-    let trie = get_suffix_trie(&map);
+    let trie = gen_suffix_trie(&map);
     c.bench_function("trie_suffix", |b| {
         b.iter(|| {
             ds.iter().for_each(|d| {
@@ -145,8 +145,8 @@ fn bench_keyword(c: &mut Criterion) {
     let v = get_keyword_rules(&hashmap).unwrap();
     let map = get_target_item_map(v);
     let ds = get_test_domains();
-    let ac = get_keywords_ac(&map);
-    let ac2 = get_keywords_ac2(v);
+    let ac = gen_keywords_ac(&map);
+    let ac2 = gen_keywords_ac2(v);
     let targets = get_keywords_targets(v);
 
     c.bench_function("ac", |b| {
@@ -177,8 +177,8 @@ fn bench_ip(c: &mut Criterion) {
 
     let ip_rules = get_ip_cidr_rules(&rule_map).unwrap();
     let ip_map = get_target_item_map(ip_rules);
-    let it = get_ip_trie(&ip_map);
-    let it2 = get_ip_trie2(&ip_map);
+    let it = gen_ip_trie(&ip_map);
+    let it2 = gen_ip_trie2(&ip_map);
 
     let ips = get_test_ips();
 
