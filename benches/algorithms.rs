@@ -69,25 +69,25 @@ pub fn get_rule_bloom(rules: &Vec<Vec<String>>) -> Bloom<&String> {
 
     let mut bloom = Bloom::new_for_fp_rate(num_items, fp_rate).unwrap();
     for x in rules {
-        let suffix = x.first().unwrap();
-        bloom.set(&suffix);
+        let d = x.first().unwrap();
+        bloom.set(&d);
     }
     bloom
 }
 fn bench_domain(c: &mut Criterion) {
-    let hashmap = load_rules("test.yaml");
+    let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = get_domain_rules(&hashmap).unwrap();
-    let ss = generate_test_domains(v, 0);
+    let ds = generate_test_domains(v, 0);
     let bloom = get_rule_bloom(v);
     // let map = get_target_item_map(v);
     let map2 = get_item_target_map(v);
     // 因为 dummy 本来就直接是  哈希，因此 bloom 多此一举，效率不如直接 dummy
     c.bench_function("dummy2_domain_with_bloom", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                if bloom.check(&s) {
-                    check_match_dummy(&map2, s);
+            ds.iter().for_each(|d| {
+                if bloom.check(&d) {
+                    get_target(&map2, d);
                 }
             });
         })
@@ -111,61 +111,61 @@ fn bench_domain(c: &mut Criterion) {
     // });
     c.bench_function("dummy2_domain", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                check_match_dummy(&map2, s);
+            ds.iter().for_each(|d| {
+                get_target(&map2, d);
             });
         })
     });
 }
 fn bench_suffix(c: &mut Criterion) {
-    let hashmap = load_rules("test.yaml");
+    let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = get_suffix_rules(&hashmap).unwrap();
     let map: HashMap<&str, Vec<&str>> = get_target_item_map(v);
-    let ss = get_test_domains();
+    let ds = get_test_domains();
     let trie = get_suffix_trie(&map);
     c.bench_function("trie_suffix", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                check_suffix_trie(&trie, s);
+            ds.iter().for_each(|d| {
+                check_suffix_trie(&trie, d);
             });
         })
     });
     c.bench_function("dummy_suffix", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                check_suffix_dummy(&map, s);
+            ds.iter().for_each(|d| {
+                check_suffix_dummy(&map, d);
             });
         })
     });
 }
 fn bench_keyword(c: &mut Criterion) {
-    let hashmap = load_rules("test.yaml");
+    let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = get_keyword_rules(&hashmap).unwrap();
     let map: HashMap<&str, Vec<&str>> = get_target_item_map(v);
-    let ss = get_test_domains();
+    let ds = get_test_domains();
     let ac = get_keywords_ac(&map);
     let ac2 = get_keywords_ac2(v);
     let targets = get_keywords_targets(v);
 
     c.bench_function("ac", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                check_keyword_ac(&ac, s);
+            ds.iter().for_each(|d| {
+                check_keyword_ac(&ac, d);
             });
         })
     });
     c.bench_function("ac2", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
-                check_keyword_ac2(&ac2, s, &targets);
+            ds.iter().for_each(|d| {
+                check_keyword_ac2(&ac2, d, &targets);
             });
         })
     });
     c.bench_function("dummy_keyword", |b| {
         b.iter(|| {
-            ss.iter().for_each(|s| {
+            ds.iter().for_each(|s| {
                 check_keyword_dummy(&map, s);
             });
         })
@@ -173,7 +173,7 @@ fn bench_keyword(c: &mut Criterion) {
 }
 
 fn bench_ip(c: &mut Criterion) {
-    let rule_map = load_rules("test.yaml");
+    let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let ip_rules = get_ip_cidr_rules(&rule_map).unwrap();
     let ip_map = get_target_item_map(ip_rules);
