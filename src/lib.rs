@@ -38,28 +38,37 @@ pub fn load_rule_set_from_file<P: AsRef<Path>>(path: P) -> Result<RuleSet, LoadY
     Ok(ruleset)
 }
 
+/// init like let mut trie = Trie::new();
 pub fn parse_rule_set_as_domain_suffix_trie(
+    mut trie: Trie<String, usize>,
     payload: &[String],
     target_id: usize,
-) -> Trie<String, usize> {
-    let mut trie = Trie::new();
-
+) {
     for v in payload.iter() {
-        let r: String = v.chars().rev().collect();
+        let mut r: String = v.chars().rev().collect();
+        // RULESET 中 表示 suffix 的 字符串 有个 加号末尾
+        r = r.trim_end_matches('+').to_string();
         trie.insert(r, target_id);
     }
-    trie
 }
+
+/// init like let mut trie = PrefixMap::<Ipv4Net, usize>::new();
 pub fn parse_rule_set_as_ip_cidr_trie(
+    mut trie: PrefixMap<Ipv4Net, usize>,
+    mut trie6: PrefixMap<Ipv6Net, usize>,
     payload: &[String],
     target_id: usize,
-) -> PrefixMap<Ipv4Net, usize> {
-    let mut trie = PrefixMap::<Ipv4Net, usize>::new();
+) {
     for v in payload.iter() {
-        let r: Ipv4Net = v.parse().unwrap();
-        trie.insert(r, target_id);
+        let r: Result<Ipv4Net, <Ipv4Net as std::str::FromStr>::Err> = v.parse();
+        match r {
+            Ok(r) => trie.insert(r, target_id),
+            Err(_) => {
+                let r: Ipv6Net = v.parse().unwrap();
+                trie6.insert(r, target_id)
+            }
+        };
     }
-    trie
 }
 
 pub fn parse_rule_set_as_classic(
@@ -100,6 +109,19 @@ pub fn parse_rules(rc: &RuleConfig) -> HashMap<String, Vec<Vec<String>>> {
         }
     }
     hashmap
+}
+
+pub fn merge_method_rules_map(
+    map1: HashMap<String, Vec<Vec<String>>>,
+    map2: HashMap<String, Vec<Vec<String>>>,
+) -> HashMap<String, Vec<Vec<String>>> {
+    let mut merged_map = map1;
+
+    for (key, value) in map2 {
+        merged_map.entry(key).or_default().extend(value);
+    }
+
+    merged_map
 }
 
 pub fn get_domain_rules(
