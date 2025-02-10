@@ -129,33 +129,33 @@ pub fn get_ip6_cidr_rules(
 }
 
 /// for DOMAIN, PROCESS-NAME etc. that matches directly
-pub fn get_item_target_map(rules: &Vec<Vec<String>>) -> HashMap<&str, &str> {
-    let mut map: HashMap<&str, &str> = HashMap::new();
+pub fn get_item_target_map(rules: &[Vec<String>]) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
     for x in rules {
         let item = x.first().unwrap();
         let target = x.get(1).unwrap();
-        map.insert(item, target);
+        map.insert(item.clone(), target.clone());
     }
     map
 }
 
 /// for SUFFIX， KEYWORD，CIDR etc. that require iter.
-pub fn get_target_item_map(rules: &Vec<Vec<String>>) -> HashMap<&str, Vec<&str>> {
-    let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
+pub fn get_target_item_map(rules: &[Vec<String>]) -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for part in rules {
         let item = part.first().unwrap();
         let target = part.get(1).unwrap();
-        map.entry(target).or_default().push(item);
+        map.entry(target.clone()).or_default().push(item.clone());
     }
     map
 }
 
-pub fn get_keywords_ac<'a>(
-    target_keywords_map: &'a HashMap<&str, Vec<&str>>,
-) -> HashMap<&'a str, AhoCorasick> {
+pub fn get_keywords_ac(
+    target_keywords_map: &HashMap<String, Vec<String>>,
+) -> HashMap<String, AhoCorasick> {
     target_keywords_map
         .iter()
-        .map(|(k, v)| (*k, AhoCorasick::new(v).unwrap()))
+        .map(|(k, v)| (k.clone(), AhoCorasick::new(v).unwrap()))
         .collect()
 }
 
@@ -167,11 +167,11 @@ pub fn get_keywords_ac2(rules: &[Vec<String>]) -> AhoCorasick {
 
     AhoCorasick::new(&result).unwrap()
 }
-pub fn get_ip_trie(target_ip_map: &HashMap<&str, Vec<&str>>) -> PrefixMap<Ipv4Net, usize> {
+pub fn get_ip_trie<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> PrefixMap<Ipv4Net, usize> {
     let mut trie = PrefixMap::<Ipv4Net, usize>::new();
     for (i, (_key, value)) in target_ip_map.iter().enumerate() {
         for v in value {
-            let r: Ipv4Net = v.parse().unwrap();
+            let r: Ipv4Net = v.as_ref().parse().unwrap();
             trie.insert(r, i);
         }
     }
@@ -194,34 +194,36 @@ impl radix_trie::TrieKey for Ipv4NetWrapper {
     }
 }
 pub struct IpTrie2(Trie<Ipv4NetWrapper, usize>);
-pub fn get_ip_trie2(target_ip_map: &HashMap<&str, Vec<&str>>) -> IpTrie2 {
+pub fn get_ip_trie2<T: AsRef<str>>(target_ip_map: &HashMap<T, Vec<T>>) -> IpTrie2 {
     let mut trie = Trie::<Ipv4NetWrapper, usize>::new();
     for (i, (_key, value)) in target_ip_map.iter().enumerate() {
         for v in value {
-            let r: Ipv4Net = v.parse().unwrap();
+            let r: Ipv4Net = v.as_ref().parse().unwrap();
             trie.insert(Ipv4NetWrapper(r), i);
         }
     }
     IpTrie2(trie)
 }
 /// the function store ips in the trie with their target index of the map
-pub fn get_ip6_trie(target_ip_map: &HashMap<&str, Vec<&str>>) -> PrefixMap<Ipv6Net, usize> {
+pub fn get_ip6_trie<T: AsRef<str>>(
+    target_ip_map: &HashMap<T, Vec<T>>,
+) -> PrefixMap<Ipv6Net, usize> {
     let mut trie = PrefixMap::<Ipv6Net, usize>::new();
     for (i, (_key, value)) in target_ip_map.iter().enumerate() {
         for v in value {
-            let r: Ipv6Net = v.parse().unwrap();
+            let r: Ipv6Net = v.as_ref().parse().unwrap();
             trie.insert(r, i);
         }
     }
     trie
 }
 /// the function store domains in the trie with their target index of the map
-pub fn get_prefix_trie<'a>(target_item_map: &'a HashMap<&str, Vec<&str>>) -> Trie<&'a str, usize> {
+pub fn get_prefix_trie<T: AsRef<str>>(target_item_map: &HashMap<T, Vec<T>>) -> Trie<String, usize> {
     let mut trie = Trie::new();
 
     for (i, (_key, value)) in target_item_map.iter().enumerate() {
         for v in value {
-            trie.insert(*v, i);
+            trie.insert(v.as_ref().to_string(), i);
         }
     }
     trie
@@ -229,12 +231,14 @@ pub fn get_prefix_trie<'a>(target_item_map: &'a HashMap<&str, Vec<&str>>) -> Tri
 
 /// the function store domain chars in the result trie in reversed order, and
 /// with their target index of the map
-pub fn get_suffix_trie(target_suffix_map: &HashMap<&str, Vec<&str>>) -> Trie<String, usize> {
+pub fn get_suffix_trie<T: AsRef<str>>(
+    target_suffix_map: &HashMap<T, Vec<T>>,
+) -> Trie<String, usize> {
     let mut trie = Trie::new();
 
     for (i, (_key, value)) in target_suffix_map.iter().enumerate() {
         for v in value {
-            let r: String = v.chars().rev().collect();
+            let r: String = v.as_ref().chars().rev().collect();
             trie.insert(r, i);
         }
     }
@@ -242,17 +246,24 @@ pub fn get_suffix_trie(target_suffix_map: &HashMap<&str, Vec<&str>>) -> Trie<Str
 }
 
 /// basic hashmap matching
-pub fn get_target<'a>(item_target_map: &'a HashMap<&str, &str>, item: &str) -> Option<&'a &'a str> {
+pub fn get_target<'a, K, V>(item_target_map: &'a HashMap<K, V>, item: &K) -> Option<&'a V>
+where
+    K: AsRef<str> + Eq + std::hash::Hash,
+    V: AsRef<str> + Eq + std::hash::Hash,
+{
     item_target_map.get(item)
 }
-pub fn check_suffix_dummy<'a>(
-    target_suffix_map: &'a HashMap<&str, Vec<&str>>,
-    domakn: &str,
-) -> Option<&'a str> {
+pub fn check_suffix_dummy<'a, T>(
+    target_suffix_map: &'a HashMap<T, Vec<T>>,
+    domain: &str,
+) -> Option<&'a T>
+where
+    T: AsRef<str> + Eq + std::hash::Hash,
+{
     for (target, items) in target_suffix_map {
         for v in items {
-            if domakn.ends_with(*v) {
-                return Some(*target);
+            if domain.ends_with(v.as_ref()) {
+                return Some(target);
             }
         }
     }
@@ -276,13 +287,13 @@ pub fn check_prefix_trie(trie: &Trie<&str, usize>, domain: &str) -> Option<usize
         None
     }
 }
-pub fn check_keyword_ac<'a>(
-    target_keyword_ac_map: &'a HashMap<&str, AhoCorasick>,
+pub fn check_keyword_ac<'a, T: AsRef<str>>(
+    target_keyword_ac_map: &'a HashMap<T, AhoCorasick>,
     domain: &str,
 ) -> Option<&'a str> {
     for (target, ac) in target_keyword_ac_map {
         if ac.is_match(domain) {
-            return Some(target);
+            return Some(target.as_ref());
         }
     }
     None
@@ -300,14 +311,18 @@ pub fn check_keyword_ac2<'a>(
     }
     None
 }
-pub fn check_keyword_dummy<'a>(
-    target_keyword_map: &'a HashMap<&str, Vec<&str>>,
+
+pub fn check_keyword_dummy<'a, T>(
+    target_keyword_map: &'a HashMap<T, Vec<T>>,
     domain: &str,
-) -> Option<&'a str> {
+) -> Option<&'a T>
+where
+    T: AsRef<str> + Eq + std::hash::Hash,
+{
     for (target, items) in target_keyword_map {
         for v in items {
-            if domain.contains(*v) {
-                return Some(*target);
+            if domain.contains(v.as_ref()) {
+                return Some(target);
             }
         }
     }
@@ -356,9 +371,9 @@ fn main() {
     println!("{:?}", dr.len());
     let suffix_rules = get_suffix_rules(&rule_map).unwrap();
     println!("{:?}", suffix_rules.len());
-    let suffix_map: HashMap<&str, Vec<&str>> = get_target_item_map(suffix_rules);
+    let suffix_map = get_target_item_map(suffix_rules);
 
-    let suffix_targets: Vec<&str> = suffix_map.keys().copied().collect();
+    let suffix_targets: Vec<&String> = suffix_map.keys().collect();
 
     println!("{:?}", suffix_targets);
     let trie = get_suffix_trie(&suffix_map);
@@ -383,7 +398,7 @@ fn main() {
     let ip_rules = get_ip_cidr_rules(&rule_map).unwrap();
     println!("{:?}", ip_rules.len());
     let ip_map = get_target_item_map(ip_rules);
-    let ip_targets: Vec<&str> = ip_map.keys().copied().collect();
+    let ip_targets: Vec<_> = ip_map.keys().collect();
     let it = get_ip_trie(&ip_map);
     let it2 = get_ip_trie2(&ip_map);
 

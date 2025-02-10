@@ -121,7 +121,7 @@ fn bench_suffix(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = get_suffix_rules(&hashmap).unwrap();
-    let map: HashMap<&str, Vec<&str>> = get_target_item_map(v);
+    let map = get_target_item_map(v);
     let ds = get_test_domains();
     let trie = get_suffix_trie(&map);
     c.bench_function("trie_suffix", |b| {
@@ -143,7 +143,7 @@ fn bench_keyword(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = get_keyword_rules(&hashmap).unwrap();
-    let map: HashMap<&str, Vec<&str>> = get_target_item_map(v);
+    let map = get_target_item_map(v);
     let ds = get_test_domains();
     let ac = get_keywords_ac(&map);
     let ac2 = get_keywords_ac2(v);
