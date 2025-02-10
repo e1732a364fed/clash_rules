@@ -387,7 +387,7 @@ pub fn get_test_domains() -> Vec<&'static str> {
 }
 /// cargo test -- --nocapture
 #[test]
-fn main() {
+fn test() {
     let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let dr = get_domain_rules(&rule_map).unwrap();

@@ -2,20 +2,27 @@
 name = "clash_rules"
 version = "0.1.0"
 edition = "2021"
+categories = ["data-structures", "config", "algorithms"]
+keywords = ["clash", "yaml", "radix_trie", "Aho-Corasick"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "a clash yaml rule parser and matching algorithms provider"
+homepage = "https://github.com/e1732a364fed/clash_rules"
+repository = "https://github.com/e1732a364fed/clash_rules"
 
 [dependencies]
 aho-corasick = "1"
 ipnet = "2"
 prefix-trie = "0.6"
 radix_trie = "0.2"
-rand = "0.9"
 serde = { version = "1", features = ["derive"] }
-serde_yaml_ng = "0.10.0"
+serde_yaml_ng = "0.10"
 
 
 [dev-dependencies]
+rand = "0.9"
 criterion = "0.5"
-bloomfilter = "3.0.1"
+bloomfilter = "3"
 
 [[bench]]
 name = "algorithms"
