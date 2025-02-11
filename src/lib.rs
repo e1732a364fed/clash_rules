@@ -6,7 +6,7 @@ pub use serde_yaml_ng;
 use ipnet::{Ipv4Net, Ipv6Net};
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -461,6 +461,25 @@ fn test() {
     for ip in ips {
         let r = cm.check_ip(std::net::IpAddr::V4(ip));
         println!("{:?}", r);
+        // #[cfg(feature = "maxminddb")]
+        // let r = cm.check_ip_country(std::net::IpAddr::V4(ip));
+        // println!("{:?}", r);
+    }
+}
+#[cfg(feature = "maxminddb")]
+pub fn get_ip_iso_by_reader(ip: IpAddr, reader: &maxminddb::Reader<Vec<u8>>) -> &str {
+    let r = reader.lookup(ip);
+    let c: maxminddb::geoip2::Country = match r {
+        Ok(c) => c,
+        Err(_e) => {
+            // warn!("look up maxminddb::Reader failed, {e}");
+            return "";
+        }
+    };
+    if let Some(c) = c.country {
+        c.iso_code.unwrap_or_default()
+    } else {
+        ""
     }
 }
 
@@ -506,6 +525,7 @@ impl Ip6Matcher {
 }
 
 /// convenient struct for checking all rules.
+/// init mmdb_reader using maxminddb::Reader::from_source
 #[derive(Debug, Default)]
 pub struct ClashRuleMatcher {
     pub domain_target_map: Option<HashMap<String, String>>,
@@ -513,6 +533,9 @@ pub struct ClashRuleMatcher {
     pub domain_suffix_matcher: Option<DomainSuffixMatcher>,
     pub ip4_matcher: Option<IpMatcher>,
     pub ip6_matcher: Option<Ip6Matcher>,
+
+    #[cfg(feature = "maxminddb")]
+    pub mmdb_reader: Option<std::sync::Arc<maxminddb::Reader<Vec<u8>>>>,
 
     /// left_rules stores rules that not handled by the ClashRuleMatcher
     pub left_rules: HashMap<String, Vec<Vec<String>>>,
@@ -586,6 +609,15 @@ impl ClashRuleMatcher {
             std::net::IpAddr::V6(ipv6_addr) => self.check_ip6(ipv6_addr),
         }
     }
+    #[cfg(feature = "maxminddb")]
+    pub fn check_ip_country(&self, ip: std::net::IpAddr) -> &str {
+        if let Some(m) = &self.mmdb_reader {
+            get_ip_iso_by_reader(ip, m)
+        } else {
+            ""
+        }
+    }
+
     pub fn check_domain(&self, domain: &str) -> Option<&String> {
         if let Some(m) = &self.domain_target_map {
             let r = m.get(domain);
