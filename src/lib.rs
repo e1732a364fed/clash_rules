@@ -539,6 +539,8 @@ pub struct ClashRuleMatcher {
     #[cfg(feature = "maxminddb")]
     pub mmdb_reader: Option<std::sync::Arc<maxminddb::Reader<Vec<u8>>>>,
 
+    #[cfg(feature = "maxminddb")]
+    pub country_target_map: Option<HashMap<String, String>>,
     /// left_rules stores rules that not handled by the ClashRuleMatcher
     pub left_rules: HashMap<String, Vec<Vec<String>>>,
 }
@@ -552,6 +554,11 @@ impl ClashRuleMatcher {
         if let Some(v) = get_domain_rules(&method_rules_map) {
             s.domain_target_map = Some(get_item_target_map(v));
             method_rules_map.remove(DOMAIN);
+        }
+        #[cfg(feature = "maxminddb")]
+        if let Some(v) = method_rules_map.get(GEOIP) {
+            s.country_target_map = Some(get_item_target_map(v));
+            method_rules_map.remove(GEOIP);
         }
         if let Some(v) = get_keyword_rules(&method_rules_map) {
             let map = get_target_item_map(v);
@@ -612,11 +619,20 @@ impl ClashRuleMatcher {
         }
     }
     #[cfg(feature = "maxminddb")]
-    pub fn check_ip_country(&self, ip: std::net::IpAddr) -> &str {
+    pub fn check_ip_country_iso(&self, ip: std::net::IpAddr) -> &str {
         if let Some(m) = &self.mmdb_reader {
             get_ip_iso_by_reader(ip, m)
         } else {
             ""
+        }
+    }
+    #[cfg(feature = "maxminddb")]
+    pub fn check_ip_country(&self, ip: std::net::IpAddr) -> Option<&String> {
+        if let Some(m) = &self.country_target_map {
+            let c = self.check_ip_country_iso(ip);
+            m.get(c)
+        } else {
+            None
         }
     }
 
