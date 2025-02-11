@@ -51,7 +51,11 @@ impl From<serde_yaml_ng::Error> for LoadYamlFileError {
 
 pub fn load_rule_set_from_file<P: AsRef<Path>>(path: P) -> Result<RuleSet, LoadYamlFileError> {
     let content = std::fs::read_to_string(path)?;
-    let ruleset = serde_yaml_ng::from_str(&content)?;
+    let ruleset = load_rule_set_from_str(&content)?;
+    Ok(ruleset)
+}
+pub fn load_rule_set_from_str(s: &str) -> Result<RuleSet, serde_yaml_ng::Error> {
+    let ruleset = serde_yaml_ng::from_str(s)?;
     Ok(ruleset)
 }
 
@@ -109,8 +113,12 @@ pub struct RuleConfig {
     pub rules: Vec<String>,
 }
 pub fn load_rules_from_file<P: AsRef<Path>>(path: P) -> Result<RuleConfig, LoadYamlFileError> {
-    let f = std::fs::read_to_string(path)?;
-    let rs = serde_yaml_ng::from_str(&f)?;
+    let s = std::fs::read_to_string(path)?;
+    let rs = load_rules_from_str(&s)?;
+    Ok(rs)
+}
+pub fn load_rules_from_str(s: &str) -> Result<RuleConfig, serde_yaml_ng::Error> {
+    let rs = serde_yaml_ng::from_str(s)?;
     Ok(rs)
 }
 
@@ -511,8 +519,8 @@ pub struct ClashRuleMatcher {
 }
 
 impl ClashRuleMatcher {
-    pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
-        let mut method_rules_map = parse_rules(&load_rules_from_file(path)?);
+    pub fn from_clash_config_str(cs: &str) -> Result<Self, serde_yaml_ng::Error> {
+        let mut method_rules_map = parse_rules(&load_rules_from_str(cs)?);
 
         let mut s = Self::default();
 
@@ -550,6 +558,11 @@ impl ClashRuleMatcher {
         }
         s.left_rules = method_rules_map;
 
+        Ok(s)
+    }
+    pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
+        let s = std::fs::read_to_string(path)?;
+        let s = Self::from_clash_config_str(&s)?;
         Ok(s)
     }
 
