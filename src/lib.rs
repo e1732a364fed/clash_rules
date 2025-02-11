@@ -1,4 +1,6 @@
 pub use aho_corasick::AhoCorasick;
+#[cfg(feature = "maxminddb")]
+pub use maxminddb;
 pub use prefix_trie::PrefixMap;
 pub use radix_trie::{Trie, TrieCommon};
 pub use serde_yaml_ng;
