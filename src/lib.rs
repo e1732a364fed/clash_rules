@@ -770,6 +770,63 @@ pub fn load_from_sqlite(conn: &Connection) -> rusqlite::Result<HashMap<String, V
 
     Ok(rules_map)
 }
+/// 新增规则
+#[cfg(feature = "rusqlite")]
+pub fn add_rule(
+    conn: &Connection,
+    rule_name: &str,
+    content: &str,
+    target: &str,
+) -> rusqlite::Result<()> {
+    let table_name = to_sql_table_name(rule_name);
+    let insert_sql = format!(
+        "INSERT INTO {} (content, target) VALUES (?1, ?2)",
+        table_name
+    );
+    conn.execute(&insert_sql, params![content, target])?;
+    Ok(())
+}
+
+/// 删除规则（根据内容删除）
+#[cfg(feature = "rusqlite")]
+pub fn delete_rule(conn: &Connection, rule_name: &str, content: &str) -> rusqlite::Result<()> {
+    let table_name = to_sql_table_name(rule_name);
+    let delete_sql = format!("DELETE FROM {} WHERE content = ?1", table_name);
+    conn.execute(&delete_sql, params![content])?;
+    Ok(())
+}
+
+/// 更新规则（修改目标标签）
+#[cfg(feature = "rusqlite")]
+pub fn update_rule(
+    conn: &Connection,
+    rule_name: &str,
+    content: &str,
+    new_target: &str,
+) -> rusqlite::Result<()> {
+    let table_name = to_sql_table_name(rule_name);
+    let update_sql = format!("UPDATE {} SET target = ?1 WHERE content = ?2", table_name);
+    conn.execute(&update_sql, params![new_target, content])?;
+    Ok(())
+}
+
+/// 查询特定规则类型的所有数据
+#[cfg(feature = "rusqlite")]
+pub fn query_rule(conn: &Connection, rule_name: &str) -> rusqlite::Result<Vec<Vec<String>>> {
+    let table_name = to_sql_table_name(rule_name);
+    let mut stmt = conn.prepare(&format!("SELECT content, target FROM {}", table_name))?;
+    let rows = stmt.query_map([], |row| {
+        let content: String = row.get(0)?;
+        let target: String = row.get(1)?;
+        Ok(vec![content, target])
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
 
 #[cfg(feature = "rusqlite")]
 #[test]
@@ -806,6 +863,20 @@ fn test_sql() -> rusqlite::Result<()> {
     println!("load");
     // 读取数据库并恢复成 HashMap
     load_from_sqlite(&conn)?;
+
+    // 插入规则
+    add_rule(&conn, "DOMAIN", "example.com", "proxy")?;
+    add_rule(&conn, "DOMAIN", "test.com", "direct")?;
+    add_rule(&conn, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+
+    // 更新规则
+    update_rule(&conn, "DOMAIN", "test.com", "proxy")?;
+
+    // 查询特定规则
+    let domain_rules = query_rule(&conn, "DOMAIN")?;
+
+    // 删除规则
+    delete_rule(&conn, "DOMAIN", "example.com")?;
 
     Ok(())
 }
