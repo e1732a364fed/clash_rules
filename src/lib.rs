@@ -3,6 +3,8 @@ pub use aho_corasick::AhoCorasick;
 pub use maxminddb;
 pub use prefix_trie::PrefixMap;
 pub use radix_trie::{Trie, TrieCommon};
+
+#[cfg(feature = "serde_yaml_ng")]
 pub use serde_yaml_ng;
 
 use ipnet::{Ipv4Net, Ipv6Net};
@@ -28,12 +30,14 @@ pub struct RuleSet {
 #[derive(Debug)]
 pub enum LoadYamlFileError {
     FileErr(std::io::Error),
+    #[cfg(feature = "serde_yaml_ng")]
     YamlErr(serde_yaml_ng::Error),
 }
 impl Display for LoadYamlFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadYamlFileError::FileErr(error) => write!(f, "{}", error),
+            #[cfg(feature = "serde_yaml_ng")]
             LoadYamlFileError::YamlErr(error) => write!(f, "{}", error),
         }
     }
@@ -45,17 +49,20 @@ impl From<std::io::Error> for LoadYamlFileError {
     }
 }
 
+#[cfg(feature = "serde_yaml_ng")]
 impl From<serde_yaml_ng::Error> for LoadYamlFileError {
     fn from(err: serde_yaml_ng::Error) -> Self {
         LoadYamlFileError::YamlErr(err)
     }
 }
 
+#[cfg(feature = "serde_yaml_ng")]
 pub fn load_rule_set_from_file<P: AsRef<Path>>(path: P) -> Result<RuleSet, LoadYamlFileError> {
     let content = std::fs::read_to_string(path)?;
     let ruleset = load_rule_set_from_str(&content)?;
     Ok(ruleset)
 }
+#[cfg(feature = "serde_yaml_ng")]
 pub fn load_rule_set_from_str(s: &str) -> Result<RuleSet, serde_yaml_ng::Error> {
     let ruleset = serde_yaml_ng::from_str(s)?;
     Ok(ruleset)
@@ -114,11 +121,13 @@ pub fn parse_rule_set_as_classic(
 pub struct RuleConfig {
     pub rules: Vec<String>,
 }
+#[cfg(feature = "serde_yaml_ng")]
 pub fn load_rules_from_file<P: AsRef<Path>>(path: P) -> Result<RuleConfig, LoadYamlFileError> {
     let s = std::fs::read_to_string(path)?;
     let rs = load_rules_from_str(&s)?;
     Ok(rs)
 }
+#[cfg(feature = "serde_yaml_ng")]
 pub fn load_rules_from_str(s: &str) -> Result<RuleConfig, serde_yaml_ng::Error> {
     let rs = serde_yaml_ng::from_str(s)?;
     Ok(rs)
@@ -405,6 +414,7 @@ pub fn get_test_domains() -> Vec<&'static str> {
     ]
 }
 /// cargo test -- --nocapture
+#[cfg(feature = "serde_yaml_ng")]
 #[test]
 fn test() {
     let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
@@ -469,6 +479,7 @@ fn test() {
     }
 }
 #[cfg(feature = "maxminddb")]
+/// <https://en.wikipedia.org/wiki/List_of_ISO_3166_country_codes>
 pub fn get_ip_iso_by_reader(ip: IpAddr, reader: &maxminddb::Reader<Vec<u8>>) -> &str {
     let r = reader.lookup(ip);
     let c: maxminddb::geoip2::Country = match r {
@@ -546,6 +557,7 @@ pub struct ClashRuleMatcher {
 }
 
 impl ClashRuleMatcher {
+    #[cfg(feature = "serde_yaml_ng")]
     pub fn from_clash_config_str(cs: &str) -> Result<Self, serde_yaml_ng::Error> {
         let mut method_rules_map = parse_rules(&load_rules_from_str(cs)?);
 
@@ -592,6 +604,7 @@ impl ClashRuleMatcher {
 
         Ok(s)
     }
+    #[cfg(feature = "serde_yaml_ng")]
     pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
         let s = std::fs::read_to_string(path)?;
         let s = Self::from_clash_config_str(&s)?;
@@ -657,4 +670,142 @@ impl ClashRuleMatcher {
         }
         None
     }
+}
+
+#[cfg(feature = "rusqlite")]
+use rusqlite::{params, Connection};
+
+/// 规则类型对应的表名
+pub const RULE_TYPES: &[&str] = &[
+    DOMAIN,
+    DOMAIN_KEYWORD,
+    DOMAIN_SUFFIX,
+    IP_CIDR,
+    IP_CIDR6,
+    PROCESS_NAME,
+    GEOIP,
+];
+
+fn to_sql_table_name(input: &str) -> String {
+    input.replace("-", "_").to_lowercase()
+}
+fn to_clash_rule_name(input: &str) -> String {
+    input.replace("_", "-").to_uppercase()
+}
+
+/// 初始化 SQLite 数据库，为每种规则类型创建一个独立的表
+#[cfg(feature = "rusqlite")]
+pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
+    for &table in RULE_TYPES {
+        let create_table_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                target TEXT NOT NULL
+            )",
+            to_sql_table_name(table)
+        );
+        conn.execute(&create_table_sql, [])?;
+    }
+    Ok(())
+}
+
+/// 将 HashMap<String, Vec<Vec<String>>> 存入 SQLite，使用多个表
+#[cfg(feature = "rusqlite")]
+pub fn save_to_sqlite(
+    conn: &mut Connection,
+    rules: &HashMap<String, Vec<Vec<String>>>,
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+
+    for (rule_name, entries) in rules {
+        if !RULE_TYPES.contains(&rule_name.as_str()) {
+            continue;
+        }
+        // 确保规则名对应一个表
+        let table_name = to_sql_table_name(rule_name);
+
+        for entry in entries {
+            if entry.len() < 2 {
+                continue; // 确保 entry 格式正确：[内容, 目标标签]
+            }
+            let content = &entry[0];
+            let target = &entry[1];
+
+            let insert_sql = format!(
+                "INSERT INTO {} (content, target) VALUES (?1, ?2)",
+                table_name
+            );
+
+            tx.execute(&insert_sql, params![content, target])?;
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// 从 SQLite 读取数据，并转换为 HashMap<String, Vec<Vec<String>>> 格式
+#[cfg(feature = "rusqlite")]
+pub fn load_from_sqlite(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Vec<String>>>> {
+    let mut rules_map: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+
+    for &table in RULE_TYPES {
+        let rule_name = to_sql_table_name(table);
+
+        let mut stmt = conn.prepare(&format!("SELECT content, target FROM {}", rule_name))?;
+        let rows = stmt.query_map([], |row| {
+            let content: String = row.get(0)?;
+            let target: String = row.get(1)?;
+            Ok(vec![content, target])
+        })?;
+
+        for row in rows {
+            rules_map
+                .entry(to_clash_rule_name(&rule_name))
+                .or_default()
+                .push(row?);
+        }
+    }
+
+    Ok(rules_map)
+}
+
+#[cfg(feature = "rusqlite")]
+#[test]
+/// cargo test -- --nocapture
+fn test_sql() -> rusqlite::Result<()> {
+    println!("init");
+    let mut conn = Connection::open("rules.db")?;
+    init_db(&conn)?;
+
+    // 示例数据
+    #[cfg(not(feature = "serde_yaml_ng"))]
+    let mut rules: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+    #[cfg(feature = "serde_yaml_ng")]
+    let mut rules = parse_rules(&load_rules_from_file("test.yaml").unwrap());
+    rules.insert(
+        "DOMAIN".to_string(),
+        vec![
+            vec!["example.com".to_string(), "proxy".to_string()],
+            vec!["test.com".to_string(), "direct".to_string()],
+        ],
+    );
+    rules.insert(
+        "IP-CIDR".to_string(),
+        vec![
+            vec!["192.168.1.0/24".to_string(), "proxy".to_string()],
+            vec!["10.0.0.0/8".to_string(), "direct".to_string()],
+        ],
+    );
+
+    println!("save");
+    // 存入数据库
+    save_to_sqlite(&mut conn, &rules)?;
+
+    println!("load");
+    // 读取数据库并恢复成 HashMap
+    load_from_sqlite(&conn)?;
+
+    Ok(())
 }
