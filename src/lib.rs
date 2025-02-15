@@ -920,7 +920,7 @@ fn test_sql() -> rusqlite::Result<()> {
     update_rule(&conn, "DOMAIN", "test.com", "proxy")?;
 
     // 查询特定规则
-    let domain_rules = query_rule(&conn, "DOMAIN")?;
+    let _domain_rules = query_rule(&conn, "DOMAIN")?;
 
     // 删除规则
     delete_rule(&conn, "DOMAIN", "example.com")?;
@@ -929,5 +929,63 @@ fn test_sql() -> rusqlite::Result<()> {
     let r = query_rules_view(&conn, sql)?;
     println!("all {}", r.len());
 
+    Ok(())
+}
+
+/// 获取 `db` 中所有表的名称
+#[cfg(feature = "rusqlite")]
+fn get_table_names(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )?;
+    let tables = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(tables)
+}
+
+/// 将 `db2.sqlite` 的数据合并到 `db1.sqlite`
+#[cfg(feature = "rusqlite")]
+pub fn merge_databases(db1_path: &str, db2_path: &str) -> rusqlite::Result<()> {
+    let conn = Connection::open(db1_path)?;
+
+    // 连接第二个数据库
+    conn.execute(
+        &format!("ATTACH DATABASE '{}' AS attached_db", db2_path),
+        [],
+    )?;
+
+    // 获取 db2.sqlite 的所有表
+    let tables = get_table_names(&conn)?;
+
+    for table in tables {
+        let sql = format!("INSERT INTO {table} SELECT * FROM attached_db.{table}");
+        conn.execute(&sql, [])?;
+    }
+
+    // 断开连接
+    conn.execute("DETACH DATABASE attached_db", [])?;
+
+    Ok(())
+}
+
+#[cfg(feature = "rusqlite")]
+#[test]
+/// cargo test -- --nocapture
+fn merge_sql() -> rusqlite::Result<()> {
+    {
+        let conn = Connection::open("1.db")?;
+        init_db(&conn)?;
+        add_rule(&conn, "DOMAIN", "test.com", "direct")?;
+        let conn = Connection::open("2.db")?;
+        init_db(&conn)?;
+        add_rule(&conn, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+    }
+    let db1 = "1.db";
+    let db2 = "2.db";
+
+    merge_databases(db1, db2)?;
+
+    println!("Databases merged successfully!");
     Ok(())
 }
