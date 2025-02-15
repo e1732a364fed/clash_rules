@@ -3,6 +3,8 @@ pub use aho_corasick::AhoCorasick;
 pub use maxminddb;
 pub use prefix_trie::PrefixMap;
 pub use radix_trie::{Trie, TrieCommon};
+#[cfg(feature = "rusqlite")]
+pub use rusqlite;
 
 #[cfg(feature = "serde_yaml_ng")]
 pub use serde_yaml_ng;
@@ -707,7 +709,50 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         );
         conn.execute(&create_table_sql, [])?;
     }
+
+    // 创建 rules_view 视图
+    let create_view_sql = "
+        CREATE VIEW IF NOT EXISTS rules_view AS
+        SELECT 'DOMAIN' AS rule_name, content, target FROM domain
+        UNION ALL
+        SELECT 'DOMAIN-SUFFIX', content, target FROM domain_suffix
+        UNION ALL
+        SELECT 'DOMAIN-KEYWORD', content, target FROM domain_keyword
+        UNION ALL
+        SELECT 'IP-CIDR', content, target FROM ip_cidr
+        UNION ALL
+        SELECT 'IP-CIDR6', content, target FROM ip_cidr6
+        UNION ALL
+        SELECT 'PROCESS-NAME', content, target FROM process_name;
+    ";
+    conn.execute(create_view_sql, [])?;
     Ok(())
+}
+
+/// query from all rule tables
+///
+/// eg: let sql = "SELECT rule_name, content, target FROM rules_view";
+pub fn query_rules_view(
+    conn: &Connection,
+    sql: &str,
+) -> rusqlite::Result<HashMap<String, Vec<Vec<String>>>> {
+    let mut rules_map: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+
+    // let mut stmt = conn.prepare("SELECT rule_name, content, target_label FROM rules_view")?;
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |row| {
+        let rule_name: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        let target_label: String = row.get(2)?;
+        Ok((rule_name, vec![content, target_label]))
+    })?;
+
+    for row in rows {
+        let (rule_name, entry) = row?;
+        rules_map.entry(rule_name).or_default().push(entry);
+    }
+
+    Ok(rules_map)
 }
 
 /// 将 HashMap<String, Vec<Vec<String>>> 存入 SQLite，使用多个表
@@ -877,6 +922,10 @@ fn test_sql() -> rusqlite::Result<()> {
 
     // 删除规则
     delete_rule(&conn, "DOMAIN", "example.com")?;
+
+    let sql = "SELECT rule_name, content, target FROM rules_view";
+    let r = query_rules_view(&conn, sql)?;
+    println!("all {}", r.len());
 
     Ok(())
 }
