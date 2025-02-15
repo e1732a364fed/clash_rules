@@ -677,7 +677,7 @@ impl ClashRuleMatcher {
 #[cfg(feature = "rusqlite")]
 use rusqlite::{params, Connection};
 
-/// 规则类型对应的表名
+/// sqlite 格式中目前支持的clash 规则名
 pub const RULE_TYPES: &[&str] = &[
     DOMAIN,
     DOMAIN_KEYWORD,
@@ -688,10 +688,10 @@ pub const RULE_TYPES: &[&str] = &[
     GEOIP,
 ];
 
-fn to_sql_table_name(input: &str) -> String {
+pub fn to_sql_table_name(input: &str) -> String {
     input.replace("-", "_").to_lowercase()
 }
-fn to_clash_rule_name(input: &str) -> String {
+pub fn to_clash_rule_name(input: &str) -> String {
     input.replace("_", "-").to_uppercase()
 }
 
@@ -723,7 +723,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         UNION ALL
         SELECT 'IP-CIDR6', content, target FROM ip_cidr6
         UNION ALL
-        SELECT 'PROCESS-NAME', content, target FROM process_name;
+        SELECT 'PROCESS-NAME', content, target FROM process_name
+        UNION ALL
+        SELECT 'GEOIP', content, target FROM geoip;
     ";
     conn.execute(create_view_sql, [])?;
     Ok(())
