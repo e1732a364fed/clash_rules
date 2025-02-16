@@ -549,9 +549,11 @@ pub struct ClashRuleMatcher {
     pub ip4_matcher: Option<IpMatcher>,
     pub ip6_matcher: Option<Ip6Matcher>,
 
+    /// for GEOIP
     #[cfg(feature = "maxminddb")]
     pub mmdb_reader: Option<std::sync::Arc<maxminddb::Reader<Vec<u8>>>>,
 
+    /// for GEOIP
     #[cfg(feature = "maxminddb")]
     pub country_target_map: Option<HashMap<String, String>>,
     /// left_rules stores rules that not handled by the ClashRuleMatcher
@@ -559,10 +561,9 @@ pub struct ClashRuleMatcher {
 }
 
 impl ClashRuleMatcher {
-    #[cfg(feature = "serde_yaml_ng")]
-    pub fn from_clash_config_str(cs: &str) -> Result<Self, serde_yaml_ng::Error> {
-        let mut method_rules_map = parse_rules(&load_rules_from_str(cs)?);
-
+    pub fn from_hashmap(
+        mut method_rules_map: HashMap<String, Vec<Vec<String>>>,
+    ) -> Result<Self, serde_yaml_ng::Error> {
         let mut s = Self::default();
 
         if let Some(v) = get_domain_rules(&method_rules_map) {
@@ -605,6 +606,12 @@ impl ClashRuleMatcher {
         s.left_rules = method_rules_map;
 
         Ok(s)
+    }
+    #[cfg(feature = "serde_yaml_ng")]
+    pub fn from_clash_config_str(cs: &str) -> Result<Self, serde_yaml_ng::Error> {
+        let method_rules_map = parse_rules(&load_rules_from_str(cs)?);
+
+        Self::from_hashmap(method_rules_map)
     }
     #[cfg(feature = "serde_yaml_ng")]
     pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
