@@ -13,6 +13,7 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::num::ParseIntError;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -552,6 +553,7 @@ pub struct ClashRuleMatcher {
     pub domain_target_map: Option<HashMap<String, String>>,
     pub domain_keyword_matcher: Option<DomainKeywordMatcher>,
     pub domain_suffix_matcher: Option<DomainSuffixMatcher>,
+    pub domain_regex_set: Option<HashMap<String, regex::RegexSet>>,
     pub ip4_matcher: Option<IpMatcher>,
     pub ip6_matcher: Option<Ip6Matcher>,
 
@@ -563,17 +565,17 @@ pub struct ClashRuleMatcher {
     #[cfg(feature = "maxminddb")]
     pub country_target_map: Option<HashMap<String, String>>,
 
+    /// stores un-optimized left rules, which are AND,OR,NOT,PROCESS-NAME,
+    /// DST-PORT, NETWORK,MATCH
+    ///
     /// (rule, target)
-    pub logic_rules: Vec<(Rule, String)>,
-
-    /// left_rules stores rules that not handled by the ClashRuleMatcher
-    pub left_rules: HashMap<String, Vec<Vec<String>>>,
+    pub rules: Vec<(Rule, String)>,
 }
 
 impl ClashRuleMatcher {
     pub fn from_hashmap(
         mut method_rules_map: HashMap<String, Vec<Vec<String>>>,
-    ) -> Result<Self, serde_yaml_ng::Error> {
+    ) -> Result<Self, ParseRuleError> {
         let mut s = Self::default();
 
         if let Some(v) = get_domain_rules(&method_rules_map) {
@@ -613,53 +615,44 @@ impl ClashRuleMatcher {
             s.ip6_matcher = Some(Ip6Matcher { trie, targets });
             method_rules_map.remove(IP_CIDR6);
         }
-
-        if let Some(v) = method_rules_map.get(AND) {
-            for ss in v {
-                let mut ss = ss.clone();
-                let target = ss.pop().unwrap();
-                ss.insert(0, AND.to_string());
-                let rule = ss.join(",");
-                let r = parse_rule(&rule);
-                s.logic_rules.push((r, target));
-            }
-            method_rules_map.remove(AND);
-        }
-        if let Some(v) = method_rules_map.get(OR) {
-            for ss in v {
-                let mut ss = ss.clone();
-                let target = ss.pop().unwrap();
-                ss.insert(0, OR.to_string());
-                let rule = ss.join(",");
-                let r = parse_rule(&rule);
-                s.logic_rules.push((r, target));
-            }
-            method_rules_map.remove(OR);
-        }
-        if let Some(v) = method_rules_map.get(NOT) {
-            for ss in v {
-                let mut ss = ss.clone();
-                let target = ss.pop().unwrap();
-                ss.insert(0, NOT.to_string());
-                let rule = ss.join(",");
-                let r = parse_rule(&rule);
-                s.logic_rules.push((r, target));
-            }
-            method_rules_map.remove(NOT);
+        if let Some(v) = method_rules_map.get(DOMAIN_REGEX) {
+            let map = get_target_item_map(v);
+            s.domain_regex_set = Some(
+                map.into_iter()
+                    .map(|(t, r)| (t, regex::RegexSet::new(r).unwrap()))
+                    .collect(),
+            );
+            method_rules_map.remove(DOMAIN_REGEX);
         }
 
-        s.left_rules = method_rules_map;
+        for (rt, v) in method_rules_map {
+            for ss in v {
+                // println!("parsing {ss:?}");
+                let mut ss = ss.clone();
+                let target = if ss.len() > 1 {
+                    ss.remove(1)
+                } else {
+                    ss.pop().unwrap()
+                };
+                ss.insert(0, rt.clone());
+                let rule = ss.join(",");
+                let r = parse_rule(&rule)?;
+                s.rules.push((r, target));
+            }
+        }
 
         Ok(s)
     }
     #[cfg(feature = "serde_yaml_ng")]
-    pub fn from_clash_config_str(cs: &str) -> Result<Self, serde_yaml_ng::Error> {
+    pub fn from_clash_config_str(cs: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let method_rules_map = parse_rules(&load_rules_from_str(cs)?);
 
-        Self::from_hashmap(method_rules_map)
+        Ok(Self::from_hashmap(method_rules_map)?)
     }
     #[cfg(feature = "serde_yaml_ng")]
-    pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, LoadYamlFileError> {
+    pub fn from_clash_config_file<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let s = std::fs::read_to_string(path)?;
         let s = Self::from_clash_config_str(&s)?;
         Ok(s)
@@ -722,6 +715,13 @@ impl ClashRuleMatcher {
                 return r;
             }
         }
+        if let Some(m) = &self.domain_regex_set {
+            for (t, r) in m {
+                if r.is_match(domain) {
+                    return Some(t);
+                }
+            }
+        }
         None
     }
 }
@@ -730,10 +730,10 @@ impl ClashRuleMatcher {
 #[test]
 fn test_logic() {
     let rule_str = "OR,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))";
-    let rule0 = parse_rule(rule_str);
+    let rule0 = parse_rule(rule_str).unwrap();
     println!("{:#?}", rule0);
     let rule_str = "AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))";
-    let rule = parse_rule(rule_str);
+    let rule = parse_rule(rule_str).unwrap();
     println!("{:#?}", rule);
     assert!(rule0.matches(&RuleInput {
         domain: Some("pcdbili.com".to_string()),
@@ -767,6 +767,7 @@ pub enum Rule {
     Network(String),
     DstPort(u16),
     ProcessName(String),
+    Match,
     Other(String, String),
 }
 
@@ -786,6 +787,7 @@ pub struct RuleInput {
 impl Rule {
     pub fn matches(&self, input: &RuleInput) -> bool {
         match self {
+            Rule::Match => true,
             Rule::And(rules) => {
                 for r in rules {
                     if !r.matches(input) {
@@ -830,7 +832,7 @@ impl Rule {
                 }
             }),
             #[cfg(feature = "maxminddb")]
-            Rule::GeoIp(region) => input.ip.clone().is_some_and(|ip| {
+            Rule::GeoIp(region) => input.ip.is_some_and(|ip| {
                 if let Some(m) = &input.mmdb_reader {
                     let iso = get_ip_iso_by_reader(ip, m);
                     iso.eq(region)
@@ -844,21 +846,38 @@ impl Rule {
     }
 }
 
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ParseRuleError {
+    #[error("not wrapped with ()")]
+    E1,
+    #[error("regex error")]
+    Regex(#[from] regex::Error),
+    #[error("parse ipcidr err")]
+    ParseIpnet(#[from] ipnet::AddrParseError),
+    #[error("parse dst port err")]
+    ParseNum(#[from] ParseIntError),
+}
+
 ///eg: DOMAIN-KEYWORD,bili
 ///eg: AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))
-pub fn parse_rule(input: &str) -> Rule {
+pub fn parse_rule(input: &str) -> Result<Rule, ParseRuleError> {
+    if input == MATCH {
+        return Ok(Rule::Match);
+    }
     let (rt, r) = input.split_once(",").unwrap();
 
     if rt.eq(AND) || rt.eq(OR) || rt.eq(NOT) {
         if !(r.starts_with('(') && r.ends_with(')')) {
-            panic!("logic format error")
+            return Err(ParseRuleError::E1);
         }
         let r = &r[1..r.len() - 1];
         let mut subrules: Vec<_> = extract_sub_rules_from(r)
             .iter()
-            .map(|s| Box::new(parse_rule(s)))
+            .map(|s| Box::new(parse_rule(s).unwrap()))
             .collect();
-        match rt {
+        let r = match rt {
             AND => Rule::And(subrules),
             OR => Rule::Or(subrules),
             NOT => {
@@ -866,28 +885,36 @@ pub fn parse_rule(input: &str) -> Rule {
                 Rule::Not(b)
             }
             _ => unreachable!("ur"),
-        }
+        };
+        Ok(r)
     } else {
-        let r = r.to_string();
-        match rt {
+        let mut r = r.to_string();
+        let r = match rt {
             DOMAIN => Rule::Domain(r),
             DOMAIN_SUFFIX => Rule::DomainSuffix(r),
             DOMAIN_KEYWORD => Rule::DomainKeyword(r),
-            DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(&r).unwrap()),
+            DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(&r)?),
             IP_CIDR6 => {
-                let r: Ipv6Net = r.parse().unwrap();
+                if let Some(pos) = r.find(',') {
+                    r.truncate(pos);
+                }
+                let r: Ipv6Net = r.parse()?;
                 Rule::IpCidr6(r)
             }
             IP_CIDR => {
-                let r: Ipv4Net = r.parse().unwrap();
+                if let Some(pos) = r.find(',') {
+                    r.truncate(pos);
+                }
+                let r: Ipv4Net = r.parse()?;
                 Rule::IpCidr(r)
             }
             GEOIP => Rule::GeoIp(r),
-            DST_PORT => Rule::DstPort(r.parse().unwrap()),
+            DST_PORT => Rule::DstPort(r.parse()?),
             NETWORK => Rule::Network(r),
             PROCESS_NAME => Rule::ProcessName(r),
             _ => Rule::Other(rt.to_string(), r),
-        }
+        };
+        Ok(r)
     }
 }
 
