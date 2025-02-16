@@ -19,10 +19,13 @@ use serde::{Deserialize, Serialize};
 pub const DOMAIN: &str = "DOMAIN";
 pub const DOMAIN_SUFFIX: &str = "DOMAIN-SUFFIX";
 pub const DOMAIN_KEYWORD: &str = "DOMAIN-KEYWORD";
+pub const DOMAIN_REGEX: &str = "DOMAIN-REGEX";
 pub const IP_CIDR: &str = "IP-CIDR";
 pub const IP_CIDR6: &str = "IP-CIDR6";
 pub const PROCESS_NAME: &str = "PROCESS-NAME";
+pub const DST_PORT: &str = "DST-PORT";
 pub const GEOIP: &str = "GEOIP";
+pub const NETWORK: &str = "NETWORK";
 pub const AND: &str = "AND";
 pub const OR: &str = "OR";
 pub const NOT: &str = "NOT";
@@ -561,7 +564,7 @@ pub struct ClashRuleMatcher {
     pub country_target_map: Option<HashMap<String, String>>,
 
     /// (rule, target)
-    pub logic_rules: Vec<(LogicalRule, String)>,
+    pub logic_rules: Vec<(Rule, String)>,
 
     /// left_rules stores rules that not handled by the ClashRuleMatcher
     pub left_rules: HashMap<String, Vec<Vec<String>>>,
@@ -617,8 +620,7 @@ impl ClashRuleMatcher {
                 let target = ss.pop().unwrap();
                 ss.insert(0, AND.to_string());
                 let rule = ss.join(",");
-                let mut rp = RuleParser::new(&rule);
-                let r = rp.parse();
+                let r = parse_rule(&rule);
                 s.logic_rules.push((r, target));
             }
             method_rules_map.remove(AND);
@@ -629,8 +631,7 @@ impl ClashRuleMatcher {
                 let target = ss.pop().unwrap();
                 ss.insert(0, OR.to_string());
                 let rule = ss.join(",");
-                let mut rp = RuleParser::new(&rule);
-                let r = rp.parse();
+                let r = parse_rule(&rule);
                 s.logic_rules.push((r, target));
             }
             method_rules_map.remove(OR);
@@ -641,8 +642,7 @@ impl ClashRuleMatcher {
                 let target = ss.pop().unwrap();
                 ss.insert(0, NOT.to_string());
                 let rule = ss.join(",");
-                let mut rp = RuleParser::new(&rule);
-                let r = rp.parse();
+                let r = parse_rule(&rule);
                 s.logic_rules.push((r, target));
             }
             method_rules_map.remove(NOT);
@@ -729,162 +729,215 @@ impl ClashRuleMatcher {
 /// cargo test test_logic -- --nocapture
 #[test]
 fn test_logic() {
-    let rule_str = "OR,((RULE-SET,site_gfw),(RULE-SET,site_geolocation-!cn)),Proxy";
-    let mut parser = RuleParser::new(rule_str);
-    let rule = parser.parse();
+    let rule_str = "OR,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))";
+    let rule0 = parse_rule(rule_str);
+    println!("{:#?}", rule0);
+    let rule_str = "AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))";
+    let rule = parse_rule(rule_str);
     println!("{:#?}", rule);
-    let rule_str = "AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn)),REJECT";
-    let mut parser = RuleParser::new(rule_str);
-    let rule = parser.parse();
+    assert!(rule0.matches(&RuleInput {
+        domain: Some("pcdbili.com".to_string()),
+        ..Default::default()
+    }));
+    assert!(!rule.matches(&RuleInput {
+        domain: Some("pcdbili.com".to_string()),
+        ..Default::default()
+    }));
+    assert!(rule.matches(&RuleInput {
+        domain: Some("pcdn.bili.com".to_string()),
+        ..Default::default()
+    }));
+    let rule_str = "AND,((OR,((DOMAIN-KEYWORD,bili),(DOMAIN,0))),(DOMAIN-REGEX,(?i)pcdn|mcdn))";
+    let rule = parse_rule(rule_str);
     println!("{:#?}", rule);
 }
 
 #[derive(Debug)]
-pub enum LogicalRule {
-    And(Box<LogicalRule>, Box<LogicalRule>),
-    Or(Box<LogicalRule>, Box<LogicalRule>),
-    Not(Box<LogicalRule>),
+pub enum Rule {
+    And(Vec<Box<Rule>>),
+    Or(Vec<Box<Rule>>),
+    Not(Box<Rule>),
     Domain(String),
     DomainSuffix(String),
     DomainKeyword(String),
-    DomainRegex(String),
-    IpCidr(String),
-    IpCidr6(String),
+    DomainRegex(regex::Regex),
+    IpCidr(Ipv4Net),
+    IpCidr6(Ipv6Net),
     GeoIp(String),
     Network(String),
-    DstPort(String),
+    DstPort(u16),
+    ProcessName(String),
     Other(String, String),
 }
 
-impl LogicalRule {
-    pub fn matches(&self, input: &str) -> bool {
-        match self {
-            LogicalRule::And(rule1, rule2) => rule1.matches(input) && rule2.matches(input),
-            LogicalRule::Or(rule1, rule2) => rule1.matches(input) || rule2.matches(input),
-            LogicalRule::Not(rule) => !rule.matches(input),
+#[derive(Default, Debug)]
+pub struct RuleInput {
+    pub domain: Option<String>,
+    pub process_name: Option<String>,
+    pub network: Option<String>,
+    pub ip: Option<IpAddr>,
+    pub dst_port: Option<u16>,
 
-            LogicalRule::Domain(domain) => input.eq(domain),
-            LogicalRule::DomainSuffix(suffix) => input.ends_with(suffix),
-            LogicalRule::DomainKeyword(keyword) => input.contains(keyword),
-            LogicalRule::IpCidr(cidr) => false,
-            LogicalRule::GeoIp(region) => false,
+    /// for geoip
+    #[cfg(feature = "maxminddb")]
+    pub mmdb_reader: Option<std::sync::Arc<maxminddb::Reader<Vec<u8>>>>,
+}
+
+impl Rule {
+    pub fn matches(&self, input: &RuleInput) -> bool {
+        match self {
+            Rule::And(rules) => {
+                for r in rules {
+                    if !r.matches(input) {
+                        return false;
+                    }
+                }
+                true
+            }
+            Rule::Or(rules) => {
+                for r in rules {
+                    if r.matches(input) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Rule::Not(rule) => !rule.matches(input),
+
+            Rule::ProcessName(p) => input
+                .process_name
+                .as_ref()
+                .is_some_and(|real_p| real_p.eq(p)),
+            Rule::Network(n) => input.network.as_ref().is_some_and(|d| d.eq(n)),
+            Rule::Domain(domain) => input.domain.as_ref().is_some_and(|d| d.eq(domain)),
+            Rule::DomainRegex(r) => input.domain.as_ref().is_some_and(|d| r.is_match(d)),
+            Rule::DomainSuffix(suffix) => {
+                input.domain.as_ref().is_some_and(|d| d.ends_with(suffix))
+            }
+            Rule::DomainKeyword(k) => input.domain.as_ref().is_some_and(|d| d.contains(k)),
+            Rule::IpCidr6(k) => input.ip.as_ref().is_some_and(|ip| {
+                if let IpAddr::V6(i) = ip {
+                    k.contains(i)
+                } else {
+                    false
+                }
+            }),
+            Rule::IpCidr(k) => input.ip.as_ref().is_some_and(|ip| {
+                if let IpAddr::V4(i) = ip {
+                    k.contains(i)
+                } else {
+                    false
+                }
+            }),
+            #[cfg(feature = "maxminddb")]
+            Rule::GeoIp(region) => input.ip.clone().is_some_and(|ip| {
+                if let Some(m) = &input.mmdb_reader {
+                    let iso = get_ip_iso_by_reader(ip, m);
+                    iso.eq(region)
+                } else {
+                    false
+                }
+            }),
+            Rule::DstPort(d) => input.dst_port.is_some_and(|rd| rd == *d),
             _ => false,
         }
     }
 }
 
-struct RuleParser<'a> {
-    input: &'a str,
-    pos: usize,
+///eg: DOMAIN-KEYWORD,bili
+///eg: AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))
+pub fn parse_rule(input: &str) -> Rule {
+    let (rt, r) = input.split_once(",").unwrap();
+
+    if rt.eq(AND) || rt.eq(OR) || rt.eq(NOT) {
+        if !(r.starts_with('(') && r.ends_with(')')) {
+            panic!("logic format error")
+        }
+        let r = &r[1..r.len() - 1];
+        let mut subrules: Vec<_> = extract_sub_rules_from(r)
+            .iter()
+            .map(|s| Box::new(parse_rule(s)))
+            .collect();
+        match rt {
+            AND => Rule::And(subrules),
+            OR => Rule::Or(subrules),
+            NOT => {
+                let b = subrules.pop().unwrap();
+                Rule::Not(b)
+            }
+            _ => unreachable!("ur"),
+        }
+    } else {
+        let r = r.to_string();
+        match rt {
+            DOMAIN => Rule::Domain(r),
+            DOMAIN_SUFFIX => Rule::DomainSuffix(r),
+            DOMAIN_KEYWORD => Rule::DomainKeyword(r),
+            DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(&r).unwrap()),
+            IP_CIDR6 => {
+                let r: Ipv6Net = r.parse().unwrap();
+                Rule::IpCidr6(r)
+            }
+            IP_CIDR => {
+                let r: Ipv4Net = r.parse().unwrap();
+                Rule::IpCidr(r)
+            }
+            GEOIP => Rule::GeoIp(r),
+            DST_PORT => Rule::DstPort(r.parse().unwrap()),
+            NETWORK => Rule::Network(r),
+            PROCESS_NAME => Rule::ProcessName(r),
+            _ => Rule::Other(rt.to_string(), r),
+        }
+    }
 }
 
-impl<'a> RuleParser<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
-    }
-
-    fn parse(&mut self) -> LogicalRule {
-        self.parse_expression()
-    }
-
-    fn parse_expression(&mut self) -> LogicalRule {
-        self.skip_commas();
-        if self.peek() == Some('(') {
-            self.consume_char(); // 跳过 '('
-            let expr = self.parse_expression();
-            self.skip_commas();
-            self.expect(")");
-            expr
-        } else {
-            let token = self.consume_until(&['(', ',', ')']);
-            self.skip_commas();
-            match token.as_str() {
-                "AND" => self.parse_binary_op(LogicalRule::And),
-                "OR" => self.parse_binary_op(LogicalRule::Or),
-                "NOT" => self.parse_unary_op(LogicalRule::Not),
-                _ => self.parse_rule(token),
-            }
-        }
-    }
-
-    fn parse_binary_op<F>(&mut self, constructor: F) -> LogicalRule
-    where
-        F: Fn(Box<LogicalRule>, Box<LogicalRule>) -> LogicalRule,
-    {
-        self.skip_commas();
-        self.expect("(");
-        self.skip_commas();
-        let left = self.parse_expression();
-        self.skip_commas();
-        self.expect(",");
-        self.skip_commas();
-        let right = self.parse_expression();
-        self.skip_commas();
-        self.expect(")");
-        constructor(Box::new(left), Box::new(right))
-    }
-
-    fn parse_unary_op<F>(&mut self, constructor: F) -> LogicalRule
-    where
-        F: Fn(Box<LogicalRule>) -> LogicalRule,
-    {
-        self.skip_commas();
-        self.expect("(");
-        let rule = self.parse_expression();
-        self.skip_commas();
-        self.expect(")");
-        constructor(Box::new(rule))
-    }
-
-    fn parse_rule(&mut self, rule_type: String) -> LogicalRule {
-        self.skip_commas();
-        self.expect("(");
-        let value = self.consume_until(&[')']);
-        self.expect(")");
-        let value = value.split(',').next().unwrap_or("").trim().to_string();
-        match rule_type.as_str() {
-            "DOMAIN" => LogicalRule::Domain(value),
-            "DOMAIN-REGEX" => LogicalRule::DomainRegex(value),
-            "DOMAIN-KEYWORD" => LogicalRule::DomainKeyword(value),
-            "DOMAIN-SUFFIX" => LogicalRule::DomainSuffix(value),
-            "NETWORK" => LogicalRule::Network(value),
-            "DST-PORT" => LogicalRule::DstPort(value),
-            _ => LogicalRule::Other(rule_type, value),
-        }
-    }
-
-    fn skip_commas(&mut self) {
-        while let Some(',') = self.peek() {
-            self.consume_char();
-        }
-    }
-
-    fn expect(&mut self, expected: &str) {
-        if self.input[self.pos..].starts_with(expected) {
-            self.pos += expected.len();
-        }
-    }
-
-    fn consume_until(&mut self, delimiters: &[char]) -> String {
-        let start = self.pos;
-        while let Some(c) = self.peek() {
-            if delimiters.contains(&c) {
+/// panics if malformed.
+///
+/// input eg: (DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn)
+///
+/// input eg: (AND,((DOMAIN,1),(DOMAIN,2))),(DOMAIN-REGEX,(?i)pcdn|mcdn)
+fn extract_sub_rules_from(input: &str) -> Vec<String> {
+    if input.starts_with('(') {
+        let mut v = vec![];
+        let mut lbi = 0;
+        loop {
+            let rbi = find_matching_bracket(input, lbi).unwrap();
+            let s = &input[lbi + 1..rbi];
+            v.push(s.trim().to_string());
+            if rbi + 1 == input.len() {
                 break;
             }
-            self.consume_char();
-        }
-        self.input[start..self.pos].trim().to_string()
-    }
 
-    fn peek(&self) -> Option<char> {
-        self.input.chars().nth(self.pos)
-    }
+            let commap = input[rbi + 1..].find(',').unwrap();
+            let bp = input[rbi + 1..].find('(').unwrap();
+            if commap >= bp {
+                panic!("commap >= bp")
+            }
 
-    fn consume_char(&mut self) {
-        if self.pos < self.input.len() {
-            self.pos += 1;
+            lbi = bp + rbi + 1;
+        }
+        v
+    } else {
+        let r = &input[1..input.len() - 1];
+        vec![r.trim().to_string()]
+    }
+}
+
+fn find_matching_bracket(text: &str, left_bracket_index: usize) -> Option<usize> {
+    let mut stack = 0;
+    for (i, c) in text[left_bracket_index..].char_indices() {
+        match c {
+            '(' => stack += 1,
+            ')' => {
+                stack -= 1;
+                if stack == 0 {
+                    return Some(left_bracket_index + i);
+                }
+            }
+            _ => {}
         }
     }
+    None
 }
 
 #[cfg(feature = "rusqlite")]

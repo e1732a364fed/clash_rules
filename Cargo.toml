@@ -1,6 +1,6 @@
 [package]
 name = "clash_rules"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 categories = ["data-structures", "config", "algorithms"]
 keywords = ["clash", "yaml", "radix_trie", "Aho-Corasick"]
@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = { version = "0.10", optional = true }
 maxminddb = { version = "0.24", optional = true }
 rusqlite = { version = "0.33", optional = true }
+regex = "1.11.1"
 
 [dev-dependencies]
 rand = "0.9"
