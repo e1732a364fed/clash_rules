@@ -31,6 +31,30 @@ pub const AND: &str = "AND";
 pub const OR: &str = "OR";
 pub const NOT: &str = "NOT";
 pub const MATCH: &str = "MATCH";
+///
+/// all supported rules
+pub const RULE_TYPES: &[&str] = &[
+    DOMAIN,
+    DOMAIN_KEYWORD,
+    DOMAIN_SUFFIX,
+    DOMAIN_REGEX,
+    IP_CIDR,
+    IP_CIDR6,
+    PROCESS_NAME,
+    DST_PORT,
+    GEOIP,
+    NETWORK,
+    MATCH,
+    AND,
+    OR,
+    NOT,
+];
+pub fn to_sql_table_name(input: &str) -> String {
+    input.replace("-", "_").to_lowercase()
+}
+pub fn to_clash_rule_name(input: &str) -> String {
+    input.replace("_", "-").to_uppercase()
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RuleSet {
@@ -142,14 +166,21 @@ pub fn load_rules_from_str(s: &str) -> Result<RuleConfig, serde_yaml_ng::Error> 
     Ok(rs)
 }
 
+pub fn parse_line(rule: &str) -> Option<(&str, Vec<String>)> {
+    let mut parts = rule.split(',');
+    if let Some(key) = parts.next() {
+        let values: Vec<String> = parts.map(|part| part.to_string()).collect();
+        return Some((key, values));
+    }
+    None
+}
+
 /// parse clash rules into METHOD-rules hashmap, the ',' splitted items is pushed in the inner Vec
 pub fn parse_rules(rc: &RuleConfig) -> HashMap<String, Vec<Vec<String>>> {
     // rule, items
     let mut hashmap: HashMap<String, Vec<Vec<String>>> = HashMap::new();
     for rule in &rc.rules {
-        let mut parts = rule.split(',');
-        if let Some(key) = parts.next() {
-            let values: Vec<String> = parts.map(|part| part.to_string()).collect();
+        if let Some((key, values)) = parse_line(rule) {
             hashmap.entry(key.to_string()).or_default().push(values);
         }
     }
@@ -794,6 +825,37 @@ pub struct RuleInput {
 }
 
 impl Rule {
+    /// from normal rule. For logic rules use parse_rule
+    pub fn from(r: &str, rule_type: &str) -> Result<Rule, ParseRuleError> {
+        Ok(match rule_type {
+            DOMAIN => Rule::Domain(r.to_string()),
+            GEOIP => Rule::GeoIp(r.to_string()),
+            MATCH => Rule::Match,
+            PROCESS_NAME => Rule::ProcessName(r.to_string()),
+            NETWORK => Rule::Network(r.to_string()),
+            DST_PORT => Rule::DstPort(r.parse()?),
+            DOMAIN_SUFFIX => Rule::DomainSuffix(r.to_string()),
+            DOMAIN_KEYWORD => Rule::DomainKeyword(r.to_string()),
+            DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(r)?),
+            IP_CIDR6 => {
+                let mut r = r.to_string();
+                if let Some(pos) = r.find(',') {
+                    r.truncate(pos);
+                }
+                let r: Ipv6Net = r.parse()?;
+                Rule::IpCidr6(r)
+            }
+            IP_CIDR => {
+                let mut r = r.to_string();
+                if let Some(pos) = r.find(',') {
+                    r.truncate(pos);
+                }
+                let r: Ipv4Net = r.parse()?;
+                Rule::IpCidr(r)
+            }
+            _ => Rule::Other(rule_type.to_string(), r.to_string()),
+        })
+    }
     pub fn matches(&self, input: &RuleInput) -> bool {
         match self {
             Rule::Match => true,
@@ -907,33 +969,7 @@ pub fn parse_rule(input: &str) -> Result<Rule, ParseRuleError> {
         };
         Ok(r)
     } else {
-        let mut r = r.to_string();
-        let r = match rt {
-            DOMAIN => Rule::Domain(r),
-            DOMAIN_SUFFIX => Rule::DomainSuffix(r),
-            DOMAIN_KEYWORD => Rule::DomainKeyword(r),
-            DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(&r)?),
-            IP_CIDR6 => {
-                if let Some(pos) = r.find(',') {
-                    r.truncate(pos);
-                }
-                let r: Ipv6Net = r.parse()?;
-                Rule::IpCidr6(r)
-            }
-            IP_CIDR => {
-                if let Some(pos) = r.find(',') {
-                    r.truncate(pos);
-                }
-                let r: Ipv4Net = r.parse()?;
-                Rule::IpCidr(r)
-            }
-            GEOIP => Rule::GeoIp(r),
-            DST_PORT => Rule::DstPort(r.parse()?),
-            NETWORK => Rule::Network(r),
-            PROCESS_NAME => Rule::ProcessName(r),
-            _ => Rule::Other(rt.to_string(), r),
-        };
-        Ok(r)
+        Rule::from(r, rt)
     }
 }
 
@@ -987,57 +1023,63 @@ fn find_matching_bracket(text: &str, left_bracket_index: usize) -> Option<usize>
 #[cfg(feature = "rusqlite")]
 use rusqlite::{params, Connection};
 
-/// sqlite 格式中目前支持的clash 规则名
-pub const RULE_TYPES: &[&str] = &[
-    DOMAIN,
-    DOMAIN_KEYWORD,
-    DOMAIN_SUFFIX,
-    IP_CIDR,
-    IP_CIDR6,
-    PROCESS_NAME,
-    GEOIP,
-];
-
-pub fn to_sql_table_name(input: &str) -> String {
-    input.replace("-", "_").to_lowercase()
-}
-pub fn to_clash_rule_name(input: &str) -> String {
-    input.replace("_", "-").to_uppercase()
-}
-
 /// 初始化 SQLite 数据库，为每种规则类型创建一个独立的表
 #[cfg(feature = "rusqlite")]
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
-    for &table in RULE_TYPES {
+    let target_sql = "CREATE TABLE targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        target TEXT NOT NULL
+    );";
+
+    conn.execute(target_sql, [])?;
+
+    let logic_group_sql = "CREATE TABLE logic_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        logic TEXT NOT NULL CHECK (logic IN ('AND', 'OR', 'NOT')),
+        target INTEGER, 
+        parent_id INTEGER, 
+        FOREIGN KEY (target) REFERENCES targets(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES logic_groups(id) ON DELETE CASCADE
+    );";
+
+    conn.execute(logic_group_sql, [])?;
+    let no_logic_rules = &RULE_TYPES[..RULE_TYPES.len() - 3];
+    for &rn in no_logic_rules {
+        let tn = to_sql_table_name(rn);
+
         let create_table_sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
-                target TEXT NOT NULL
+                target INTEGER, 
+                logic_group_id INTEGER,
+            FOREIGN KEY (target) REFERENCES targets(id) ON DELETE CASCADE,
+            FOREIGN KEY (logic_group_id) REFERENCES logic_groups(id) ON DELETE CASCADE
             )",
-            to_sql_table_name(table)
+            tn
         );
         conn.execute(&create_table_sql, [])?;
+
+        let create_index_sql = format!("CREATE INDEX {}_index ON {} (content);", tn, tn);
+        conn.execute(&create_index_sql, [])?;
     }
 
     // 创建 rules_view 视图
-    let create_view_sql = "
-        CREATE VIEW IF NOT EXISTS rules_view AS
-        SELECT 'DOMAIN' AS rule_name, content, target FROM domain
-        UNION ALL
-        SELECT 'DOMAIN-SUFFIX', content, target FROM domain_suffix
-        UNION ALL
-        SELECT 'DOMAIN-KEYWORD', content, target FROM domain_keyword
-        UNION ALL
-        SELECT 'IP-CIDR', content, target FROM ip_cidr
-        UNION ALL
-        SELECT 'IP-CIDR6', content, target FROM ip_cidr6
-        UNION ALL
-        SELECT 'PROCESS-NAME', content, target FROM process_name
-        UNION ALL
-        SELECT 'GEOIP', content, target FROM geoip;
-    ";
-    conn.execute(create_view_sql, [])?;
+    let mut create_view_sql = "CREATE VIEW IF NOT EXISTS rules_view AS\n".to_string();
+    let mut v = vec![];
+    for &rn in no_logic_rules {
+        let s = format!(
+            "SELECT '{}' AS rule_name, content, target FROM {}",
+            rn,
+            to_sql_table_name(rn)
+        );
+        v.push(s);
+    }
+    let s = v.join("\nUNION ALL\n");
+    create_view_sql = create_view_sql + &s + ";";
+
+    conn.execute(&create_view_sql, [])?;
+
     Ok(())
 }
 
@@ -1050,24 +1092,172 @@ pub fn query_rules_view(
 ) -> rusqlite::Result<HashMap<String, Vec<Vec<String>>>> {
     let mut rules_map: HashMap<String, Vec<Vec<String>>> = HashMap::new();
 
-    // let mut stmt = conn.prepare("SELECT rule_name, content, target_label FROM rules_view")?;
+    let mut stmt = conn.prepare("SELECT id, target FROM targets")?;
+    let targets: HashMap<usize, String> = stmt
+        .query_map([], |row| {
+            let id: usize = row.get(0)?;
+            let target: String = row.get(1)?;
+            Ok((id, target))
+        })?
+        .map(|r| r.unwrap())
+        .collect();
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], |row| {
         let rule_name: String = row.get(0)?;
         let content: String = row.get(1)?;
-        let target_label: String = row.get(2)?;
-        Ok((rule_name, vec![content, target_label]))
+        let target_label: usize = row.get(2)?;
+        Ok((rule_name, content, target_label))
     })?;
 
     for row in rows {
-        let (rule_name, entry) = row?;
-        rules_map.entry(rule_name).or_default().push(entry);
+        let (rule_name, c, ti) = row?;
+        rules_map
+            .entry(rule_name)
+            .or_default()
+            .push(vec![c, targets.get(&ti).unwrap().to_string()]);
     }
 
     Ok(rules_map)
 }
 
-/// 将 HashMap<String, Vec<Vec<String>>> 存入 SQLite，使用多个表
+pub fn insert_rule_with_target(
+    conn: &rusqlite::Transaction,
+    rule: &Rule,
+    target: Option<&str>,
+    parent_id: Option<i32>,
+) -> rusqlite::Result<Option<i32>> {
+    // println!("irwt {rule:?}");
+    // 1.
+    let target_id: Option<i32> = if target.is_some() {
+        conn.execute(
+        "INSERT INTO targets (target) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM targets WHERE target = ?);",
+        params![target, target],
+    )?;
+        conn.query_row(
+            "SELECT id FROM targets WHERE target = ?;",
+            params![target],
+            |row| row.get(0),
+        )?
+    } else {
+        None
+    };
+
+    match rule {
+        Rule::And(rules) | Rule::Or(rules) => {
+            // 2. 插入 logic_groups 表
+            let logic_type = match rule {
+                Rule::And(_) => AND,
+                Rule::Or(_) => OR,
+                _ => unreachable!(),
+            };
+            conn.execute(
+                "INSERT INTO logic_groups (logic, target, parent_id) VALUES (?, ?, ?);",
+                params![logic_type, target_id, parent_id],
+            )?;
+            let logic_group_id: i32 =
+                conn.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
+
+            // 3. 递归插入子规则
+            for sub_rule in rules {
+                insert_rule_with_target(conn, sub_rule, None, Some(logic_group_id))?;
+            }
+
+            Ok(Some(logic_group_id))
+        }
+
+        Rule::Not(sub_rule) => {
+            // 2. 插入 logic_groups 表
+            conn.execute(
+                "INSERT INTO logic_groups (logic, target, parent_id) VALUES ('NOT', ?, ?);",
+                params![target_id, parent_id],
+            )?;
+            let logic_group_id: i32 =
+                conn.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
+
+            // 3. 递归插入子规则
+            insert_rule_with_target(conn, sub_rule, None, Some(logic_group_id))?;
+
+            Ok(Some(logic_group_id))
+        }
+
+        // 4. 处理基础规则
+        Rule::Domain(content)
+        | Rule::DomainSuffix(content)
+        | Rule::DomainKeyword(content)
+        | Rule::GeoIp(content)
+        | Rule::Network(content)
+        | Rule::ProcessName(content) => {
+            let table_name = match rule {
+                Rule::Domain(_) => "domain",
+                Rule::DomainSuffix(_) => "domain_suffix",
+                Rule::DomainKeyword(_) => "domain_keyword",
+                Rule::GeoIp(_) => "geoip",
+                Rule::Network(_) => "network",
+                Rule::ProcessName(_) => "process_name",
+                _ => unreachable!(),
+            };
+            let query = format!(
+                "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
+                table_name
+            );
+            conn.execute(&query, params![content, target_id, parent_id])?;
+            Ok(None)
+        }
+
+        Rule::IpCidr(ipn) => {
+            let table_name = "ip_cidr";
+            let query = format!(
+                "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
+                table_name
+            );
+            conn.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
+            Ok(None)
+        }
+        Rule::IpCidr6(ipn) => {
+            let table_name = "ip_cidr6";
+            let query = format!(
+                "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
+                table_name
+            );
+            conn.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
+            Ok(None)
+        }
+
+        Rule::DstPort(port) => {
+            conn.execute(
+                "INSERT INTO dst_port (content, target, logic_group_id) VALUES (?, ?, ?);",
+                params![port, target_id, parent_id],
+            )?;
+            Ok(None)
+        }
+
+        Rule::Match => {
+            conn.execute(
+                "INSERT INTO match (content, target, logic_group_id) VALUES ('MATCH', ?, ?);",
+                params![target_id, parent_id],
+            )?;
+            Ok(None)
+        }
+
+        Rule::Other(_rule_type, _content) => {
+            // conn.execute(
+            //     "INSERT INTO other (rule_type, content, target, logic_group_id) VALUES (?, ?, ?, ?);",
+            //     params![rule_type, content, target_id, parent_id],
+            // )?;
+            Ok(None)
+        }
+
+        Rule::DomainRegex(r) => {
+            let regex = r.to_string();
+            conn.execute(
+                "INSERT INTO domain_regex (content, target, logic_group_id) VALUES (?, ?, ?);",
+                params![regex, target_id, parent_id],
+            )?;
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(feature = "rusqlite")]
 pub fn save_to_sqlite(
     conn: &mut Connection,
@@ -1079,22 +1269,28 @@ pub fn save_to_sqlite(
         if !RULE_TYPES.contains(&rule_name.as_str()) {
             continue;
         }
-        // 确保规则名对应一个表
-        let table_name = to_sql_table_name(rule_name);
+        if rule_name == AND || rule_name == OR || rule_name == NOT {
+            for entry in entries {
+                let mut e = entry.clone();
+                let target = e.pop().unwrap();
+                e.insert(0, rule_name.to_string());
 
-        for entry in entries {
-            if entry.len() < 2 {
-                continue; // 确保 entry 格式正确：[内容, 目标标签]
+                let s: String = e.join(",");
+                let r = parse_rule(&s).unwrap();
+                insert_rule_with_target(&tx, &r, Some(&target), None).unwrap();
             }
-            let content = &entry[0];
-            let target = &entry[1];
+        } else {
+            let table_name = to_sql_table_name(rule_name);
 
-            let insert_sql = format!(
-                "INSERT INTO {} (content, target) VALUES (?1, ?2)",
-                table_name
-            );
+            for entry in entries {
+                if entry.len() < 2 {
+                    continue; // 确保 entry 格式正确：[内容, 目标标签]
+                }
+                let content = &entry[0];
+                let target = &entry[1];
 
-            tx.execute(&insert_sql, params![content, target])?;
+                add_rule(&tx, &table_name, content, target)?;
+            }
         }
     }
 
@@ -1102,49 +1298,83 @@ pub fn save_to_sqlite(
     Ok(())
 }
 
-/// 从 SQLite 读取数据，并转换为 HashMap<String, Vec<Vec<String>>> 格式
+pub fn load_logic_rules_from_sqlite(conn: &Connection) -> rusqlite::Result<Vec<Rule>> {
+    let mut stmt = conn.prepare("SELECT id FROM logic_groups WHERE parent_id IS NULL;")?;
+    let ids: Vec<i32> = stmt
+        .query_map(params![], |row| row.get(0))?
+        .map(|r| r.unwrap())
+        .collect();
+    ids.into_iter()
+        .map(|id| get_rule_from_logic_group(conn, id))
+        .collect()
+}
+/// load normal rules
 #[cfg(feature = "rusqlite")]
 pub fn load_from_sqlite(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Vec<String>>>> {
     let mut rules_map: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, target FROM targets")?;
+    let targets: HashMap<usize, String> = stmt
+        .query_map([], |row| {
+            let id: usize = row.get(0)?;
+            let target: String = row.get(1)?;
+            Ok((id, target))
+        })?
+        .map(|r| r.unwrap())
+        .collect();
 
-    for &table in RULE_TYPES {
-        let rule_name = to_sql_table_name(table);
+    for &rn in &RULE_TYPES[..RULE_TYPES.len() - 3] {
+        let rule_name = to_sql_table_name(rn);
 
-        let mut stmt = conn.prepare(&format!("SELECT content, target FROM {}", rule_name))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT content, target FROM {} where target IS NOT NULL",
+            rule_name
+        ))?;
         let rows = stmt.query_map([], |row| {
             let content: String = row.get(0)?;
-            let target: String = row.get(1)?;
-            Ok(vec![content, target])
+            let target: usize = row.get(1)?;
+            Ok((content, target))
         })?;
 
         for row in rows {
+            let row = row?;
             rules_map
                 .entry(to_clash_rule_name(&rule_name))
                 .or_default()
-                .push(row?);
+                .push(vec![row.0, targets.get(&row.1).unwrap().to_string()]);
         }
     }
 
     Ok(rules_map)
 }
-/// 新增规则
+/// add a normal rule
 #[cfg(feature = "rusqlite")]
 pub fn add_rule(
-    conn: &Connection,
-    rule_name: &str,
+    tx: &rusqlite::Transaction,
+    rule_table: &str,
     content: &str,
     target: &str,
 ) -> rusqlite::Result<()> {
-    let table_name = to_sql_table_name(rule_name);
-    let insert_sql = format!(
-        "INSERT INTO {} (content, target) VALUES (?1, ?2)",
-        table_name
+    let rule_table = to_sql_table_name(rule_table);
+    tx.execute(
+        "INSERT INTO targets (target) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM targets WHERE target = ?);",
+        params![target, target],
+    )?;
+    let target_id: i32 = tx.query_row(
+        "SELECT id FROM targets WHERE target = ?",
+        params![target],
+        |row| row.get(0),
+    )?;
+
+    let query = format!(
+        "INSERT INTO {} (content, target) VALUES (?, ?);",
+        rule_table
     );
-    conn.execute(&insert_sql, params![content, target])?;
+    tx.execute(&query, params![content, target_id])?;
+
     Ok(())
 }
 
-/// 删除规则（根据内容删除）
+/// delete a normal rule
 #[cfg(feature = "rusqlite")]
 pub fn delete_rule(conn: &Connection, rule_name: &str, content: &str) -> rusqlite::Result<()> {
     let table_name = to_sql_table_name(rule_name);
@@ -1153,25 +1383,46 @@ pub fn delete_rule(conn: &Connection, rule_name: &str, content: &str) -> rusqlit
     Ok(())
 }
 
-/// 更新规则（修改目标标签）
+/// update target for a normal rule
 #[cfg(feature = "rusqlite")]
-pub fn update_rule(
+pub fn update_target(
     conn: &Connection,
-    rule_name: &str,
+    rule_table: &str,
     content: &str,
     new_target: &str,
 ) -> rusqlite::Result<()> {
-    let table_name = to_sql_table_name(rule_name);
-    let update_sql = format!("UPDATE {} SET target = ?1 WHERE content = ?2", table_name);
-    conn.execute(&update_sql, params![new_target, content])?;
+    let rule_table = to_sql_table_name(rule_table);
+    // 确保 new_target 在 targets 表中存在
+    conn.execute(
+        "INSERT INTO targets (target) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM targets WHERE target = ?);",
+        params![new_target, new_target],
+    )?;
+
+    let new_target_id: i32 = conn.query_row(
+        "SELECT id FROM targets WHERE target = ?;",
+        params![new_target],
+        |row| row.get(0),
+    )?;
+
+    let query = format!("UPDATE {} SET target = ? WHERE content = ?;", rule_table);
+    conn.execute(&query, params![new_target_id, content])?;
+
     Ok(())
 }
 
-/// 查询特定规则类型的所有数据
+/// get contents and targets for a normal rule
 #[cfg(feature = "rusqlite")]
 pub fn query_rule(conn: &Connection, rule_name: &str) -> rusqlite::Result<Vec<Vec<String>>> {
     let table_name = to_sql_table_name(rule_name);
-    let mut stmt = conn.prepare(&format!("SELECT content, target FROM {}", table_name))?;
+
+    let mut stmt = conn.prepare(&format!(
+        "
+    SELECT r.content, t.target
+    FROM {} r
+    JOIN targets t ON r.target = t.id;
+",
+        table_name
+    ))?;
     let rows = stmt.query_map([], |row| {
         let content: String = row.get(0)?;
         let target: String = row.get(1)?;
@@ -1185,33 +1436,90 @@ pub fn query_rule(conn: &Connection, rule_name: &str) -> rusqlite::Result<Vec<Ve
     Ok(result)
 }
 
+fn get_rule_from_logic_group(conn: &Connection, logic_group_id: i32) -> rusqlite::Result<Rule> {
+    // 获取当前 logic_group 规则类型
+    let mut stmt = conn.prepare("SELECT logic FROM logic_groups WHERE id = ?;")?;
+    let logic: String = stmt.query_row(params![logic_group_id], |row| row.get(0))?;
+
+    // 递归获取子规则
+    let mut stmt = conn.prepare("SELECT id FROM logic_groups WHERE parent_id = ?;")?;
+    let child_logic_groups = stmt
+        .query_map(params![logic_group_id], |row| row.get(0))?
+        .collect::<Result<Vec<i32>, rusqlite::Error>>()?;
+
+    let mut sub_rules = Vec::new();
+    for &rn in &RULE_TYPES[..RULE_TYPES.len() - 3] {
+        let rule_name = to_sql_table_name(rn);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT content FROM {rule_name} WHERE logic_group_id = ?;"
+        ))?;
+        let rs = stmt
+            .query_map(params![logic_group_id], |row| row.get(0))?
+            .collect::<Result<Vec<String>, rusqlite::Error>>()?
+            .into_iter()
+            .map(|s| Rule::from(&s, rn).unwrap())
+            .collect::<Vec<Rule>>();
+        sub_rules.extend(rs);
+    }
+
+    for child_id in child_logic_groups {
+        sub_rules.push(get_rule_from_logic_group(conn, child_id)?);
+    }
+
+    match logic.as_str() {
+        "AND" => Ok(Rule::And(sub_rules)),
+        "OR" => Ok(Rule::Or(sub_rules)),
+        "NOT" => {
+            if sub_rules.len() == 1 {
+                Ok(Rule::Not(Box::new(sub_rules.into_iter().next().unwrap())))
+            } else {
+                Err(rusqlite::Error::QueryReturnedNoRows) // NOT 规则只能有一个子规则
+            }
+        }
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
 #[cfg(feature = "rusqlite")]
 #[test]
-/// cargo test -- --nocapture
+/// cargo test test_sql -- --nocapture
 fn test_sql() -> rusqlite::Result<()> {
     println!("init");
+    let _ = std::fs::remove_file("rules.db");
     let mut conn = Connection::open("rules.db")?;
     init_db(&conn)?;
 
+    println!("rules");
     // 示例数据
     #[cfg(not(feature = "serde_yaml_ng"))]
     let mut rules: HashMap<String, Vec<Vec<String>>> = HashMap::new();
     #[cfg(feature = "serde_yaml_ng")]
     let mut rules = parse_rules(&load_rules_from_file("test.yaml").unwrap());
-    rules.insert(
-        "DOMAIN".to_string(),
-        vec![
+    rules
+        .entry("DOMAIN".to_string())
+        .or_default()
+        .append(&mut vec![
             vec!["example.com".to_string(), "proxy".to_string()],
             vec!["test.com".to_string(), "direct".to_string()],
-        ],
-    );
-    rules.insert(
-        "IP-CIDR".to_string(),
-        vec![
+        ]);
+    rules
+        .entry("IP-CIDR".to_string())
+        .or_default()
+        .append(&mut vec![
             vec!["192.168.1.0/24".to_string(), "proxy".to_string()],
             vec!["10.0.0.0/8".to_string(), "direct".to_string()],
-        ],
-    );
+        ]);
+    let rule_str1 = "OR,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn)),direct".to_string();
+    let rule_str2 = "AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn)),direct".to_string();
+    let rule_str3 =
+        "AND,((OR,((DOMAIN-KEYWORD,bili),(DOMAIN,0))),(DOMAIN-REGEX,(?i)pcdn|mcdn)),direct"
+            .to_string();
+    let rc = RuleConfig {
+        rules: vec![rule_str1, rule_str2, rule_str3],
+    };
+    let h2 = parse_rules(&rc);
+    println!("{h2:?}");
+    let rules = merge_method_rules_map(rules, h2);
 
     println!("save");
     // 存入数据库
@@ -1220,24 +1528,33 @@ fn test_sql() -> rusqlite::Result<()> {
     println!("load");
     // 读取数据库并恢复成 HashMap
     load_from_sqlite(&conn)?;
+    let lrs = load_logic_rules_from_sqlite(&conn)?;
+    println!("{lrs:?}");
 
-    // 插入规则
-    add_rule(&conn, "DOMAIN", "example.com", "proxy")?;
-    add_rule(&conn, "DOMAIN", "test.com", "direct")?;
-    add_rule(&conn, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+    {
+        println!("add");
+        let tx = conn.transaction()?;
 
-    // 更新规则
-    update_rule(&conn, "DOMAIN", "test.com", "proxy")?;
+        add_rule(&tx, "DOMAIN", "example.com", "proxy")?;
+        add_rule(&tx, "DOMAIN", "test.com", "direct")?;
+        add_rule(&tx, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+    }
 
+    println!("update");
+    update_target(&conn, "DOMAIN", "test.com", "proxy")?;
+
+    println!("query");
     // 查询特定规则
     let _domain_rules = query_rule(&conn, "DOMAIN")?;
 
+    println!("delete");
     // 删除规则
     delete_rule(&conn, "DOMAIN", "example.com")?;
 
-    let sql = "SELECT rule_name, content, target FROM rules_view";
+    let sql = "SELECT rule_name, content, target FROM rules_view WHERE target IS NOT NULL";
+    println!("query view");
     let r = query_rules_view(&conn, sql)?;
-    println!("all {}", r.len());
+    println!("all {:?}", r.len());
 
     Ok(())
 }
@@ -1286,12 +1603,17 @@ fn merge_sql() -> rusqlite::Result<()> {
     let _ = std::fs::remove_file("1.db");
     let _ = std::fs::remove_file("2.db");
     {
-        let conn = Connection::open("1.db")?;
+        let mut conn = Connection::open("1.db")?;
         init_db(&conn)?;
-        add_rule(&conn, "DOMAIN", "test.com", "direct")?;
-        let conn = Connection::open("2.db")?;
+        add_rule(&conn.transaction().unwrap(), "DOMAIN", "test.com", "direct")?;
+        let mut conn = Connection::open("2.db")?;
         init_db(&conn)?;
-        add_rule(&conn, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+        add_rule(
+            &conn.transaction().unwrap(),
+            "IP-CIDR",
+            "192.168.1.0/24",
+            "proxy",
+        )?;
     }
     let db1 = "1.db";
     let db2 = "2.db";
