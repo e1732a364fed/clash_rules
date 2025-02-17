@@ -19,7 +19,7 @@ serde = { version = "1", features = ["derive"] }
 
 serde_yaml_ng = { version = "0.10", optional = true }
 maxminddb = { version = "0.24", optional = true }
-rusqlite = { version = "0.33", optional = true }
+rusqlite = { version = "0.33", features = ["serialize"], optional = true }
 regex = "1.11.1"
 thiserror = "2.0.11"
 

@@ -769,6 +769,7 @@ impl ClashRuleMatcher {
     }
 }
 
+/// All supported clash rules
 #[derive(Debug)]
 pub enum Rule {
     And(Vec<Rule>),
