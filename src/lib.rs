@@ -169,32 +169,6 @@ pub fn merge_method_rules_map(
     merged_map
 }
 
-pub fn get_domain_rules(
-    method_rules_map: &HashMap<String, Vec<Vec<String>>>,
-) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get(DOMAIN)
-}
-pub fn get_suffix_rules(
-    method_rules_map: &HashMap<String, Vec<Vec<String>>>,
-) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get(DOMAIN_SUFFIX)
-}
-pub fn get_keyword_rules(
-    method_rules_map: &HashMap<String, Vec<Vec<String>>>,
-) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get(DOMAIN_KEYWORD)
-}
-pub fn get_ip_cidr_rules(
-    method_rules_map: &HashMap<String, Vec<Vec<String>>>,
-) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get(IP_CIDR)
-}
-pub fn get_ip6_cidr_rules(
-    method_rules_map: &HashMap<String, Vec<Vec<String>>>,
-) -> Option<&Vec<Vec<String>>> {
-    method_rules_map.get(IP_CIDR6)
-}
-
 /// for DOMAIN, PROCESS-NAME etc. that matches directly
 pub fn get_item_target_map(rules: &[Vec<String>]) -> HashMap<String, String> {
     let mut map: HashMap<String, String> = HashMap::new();
@@ -428,9 +402,9 @@ pub fn get_test_domains() -> Vec<&'static str> {
 fn test() {
     let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
-    let dr = get_domain_rules(&rule_map).unwrap();
+    let dr = rule_map.get(DOMAIN).unwrap();
     println!("{:?}", dr.len());
-    let suffix_rules = get_suffix_rules(&rule_map).unwrap();
+    let suffix_rules = rule_map.get(DOMAIN_SUFFIX).unwrap();
     println!("{:?}", suffix_rules.len());
     let suffix_map = get_target_item_map(suffix_rules);
 
@@ -439,7 +413,7 @@ fn test() {
     println!("{:?}", suffix_targets);
     let trie = gen_suffix_trie(&suffix_map);
 
-    let keyword_rules = get_keyword_rules(&rule_map).unwrap();
+    let keyword_rules = rule_map.get(DOMAIN_KEYWORD).unwrap();
     println!("{:?}", keyword_rules.len());
     let kmap = get_target_item_map(keyword_rules);
     let ac = gen_keywords_ac(&kmap);
@@ -456,7 +430,7 @@ fn test() {
         println!("{:?}", r);
     }
 
-    let ip_rules = get_ip_cidr_rules(&rule_map).unwrap();
+    let ip_rules = rule_map.get(IP_CIDR).unwrap();
     println!("{:?}", ip_rules.len());
     let ip_map = get_target_item_map(ip_rules);
     let ip_targets: Vec<_> = ip_map.keys().collect();
@@ -471,7 +445,7 @@ fn test() {
         println!("{:?}", r.map(|i| ip_targets.get(i).unwrap()));
     }
 
-    let ip_rules = get_ip6_cidr_rules(&rule_map).unwrap();
+    let ip_rules = rule_map.get(IP_CIDR6).unwrap();
     println!("{:?}", ip_rules.len());
 
     let cm = ClashRuleMatcher::from_clash_config_file("test.yaml").unwrap();
@@ -578,7 +552,7 @@ impl ClashRuleMatcher {
     ) -> Result<Self, ParseRuleError> {
         let mut s = Self::default();
 
-        if let Some(v) = get_domain_rules(&method_rules_map) {
+        if let Some(v) = method_rules_map.get(DOMAIN) {
             s.domain_target_map = Some(get_item_target_map(v));
             method_rules_map.remove(DOMAIN);
         }
@@ -586,34 +560,6 @@ impl ClashRuleMatcher {
         if let Some(v) = method_rules_map.get(GEOIP) {
             s.country_target_map = Some(get_item_target_map(v));
             method_rules_map.remove(GEOIP);
-        }
-        if let Some(v) = get_keyword_rules(&method_rules_map) {
-            let map = get_target_item_map(v);
-            let targets = map.keys().cloned().collect();
-            let ac = gen_keywords_ac2(v);
-            s.domain_keyword_matcher = Some(DomainKeywordMatcher { ac, targets });
-            method_rules_map.remove(DOMAIN_KEYWORD);
-        }
-        if let Some(v) = get_suffix_rules(&method_rules_map) {
-            let map = get_target_item_map(v);
-            let targets = map.keys().cloned().collect();
-            let trie = gen_suffix_trie(&map);
-            s.domain_suffix_matcher = Some(DomainSuffixMatcher { trie, targets });
-            method_rules_map.remove(DOMAIN_SUFFIX);
-        }
-        if let Some(v) = get_ip_cidr_rules(&method_rules_map) {
-            let map = get_target_item_map(v);
-            let targets = map.keys().cloned().collect();
-            let trie = gen_ip_trie(&map);
-            s.ip4_matcher = Some(IpMatcher { trie, targets });
-            method_rules_map.remove(IP_CIDR);
-        }
-        if let Some(v) = get_ip6_cidr_rules(&method_rules_map) {
-            let map = get_target_item_map(v);
-            let targets = map.keys().cloned().collect();
-            let trie = gen_ip6_trie(&map);
-            s.ip6_matcher = Some(Ip6Matcher { trie, targets });
-            method_rules_map.remove(IP_CIDR6);
         }
         if let Some(v) = method_rules_map.get(DOMAIN_REGEX) {
             let map = get_target_item_map(v);
@@ -624,23 +570,63 @@ impl ClashRuleMatcher {
             );
             method_rules_map.remove(DOMAIN_REGEX);
         }
+        if let Some(v) = method_rules_map.get(DOMAIN_KEYWORD) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let ac = gen_keywords_ac2(v);
+            s.domain_keyword_matcher = Some(DomainKeywordMatcher { ac, targets });
+            method_rules_map.remove(DOMAIN_KEYWORD);
+        }
+        if let Some(v) = method_rules_map.get(DOMAIN_SUFFIX) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_suffix_trie(&map);
+            s.domain_suffix_matcher = Some(DomainSuffixMatcher { trie, targets });
+            method_rules_map.remove(DOMAIN_SUFFIX);
+        }
+        if let Some(v) = method_rules_map.get(IP_CIDR) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_ip_trie(&map);
+            s.ip4_matcher = Some(IpMatcher { trie, targets });
+            method_rules_map.remove(IP_CIDR);
+        }
+        if let Some(v) = method_rules_map.get(IP_CIDR6) {
+            let map = get_target_item_map(v);
+            let targets = map.keys().cloned().collect();
+            let trie = gen_ip6_trie(&map);
+            s.ip6_matcher = Some(Ip6Matcher { trie, targets });
+            method_rules_map.remove(IP_CIDR6);
+        }
+        let mt = method_rules_map.remove("MATCH");
 
-        for (rt, v) in method_rules_map {
-            for ss in v {
+        for (rt, item) in method_rules_map {
+            for mut content in item {
                 // println!("parsing {ss:?}");
-                let mut ss = ss.clone();
-                let target = if ss.len() > 1 {
-                    ss.remove(1)
+                let target = if content.len() > 1 {
+                    content.remove(1)
                 } else {
-                    ss.pop().unwrap()
+                    content.pop().unwrap()
                 };
-                ss.insert(0, rt.clone());
-                let rule = ss.join(",");
-                let r = parse_rule(&rule)?;
+                content.insert(0, rt.clone());
+                let rs = content.join(",");
+                let r = parse_rule(&rs)?;
                 s.rules.push((r, target));
             }
         }
 
+        // put MATCH at the end, make sure only shows up once
+        if let Some(mut t) = mt {
+            if !t.is_empty() {
+                let mut t = t.remove(0);
+                if !t.is_empty() {
+                    let t = t.remove(0);
+                    s.rules.push((Rule::Match, t));
+                }
+            }
+        }
+
+        // println!("{:?}", s.rules);
         Ok(s)
     }
     #[cfg(feature = "serde_yaml_ng")]
@@ -720,6 +706,29 @@ impl ClashRuleMatcher {
                 if r.is_match(domain) {
                     return Some(t);
                 }
+            }
+        }
+        None
+    }
+    pub fn matches(&self, input: &RuleInput) -> Option<&String> {
+        let dt = input.domain.as_ref().and_then(|d| self.check_domain(d));
+        if dt.is_some() {
+            return dt;
+        }
+        let it = input.ip.and_then(|d| self.check_ip(d));
+        if it.is_some() {
+            return it;
+        }
+        #[cfg(feature = "maxminddb")]
+        {
+            let it = input.ip.and_then(|d| self.check_ip_country(d));
+            if it.is_some() {
+                return it;
+            }
+        }
+        for r in self.rules.iter() {
+            if r.0.matches(input) {
+                return Some(&r.1);
             }
         }
         None
@@ -817,16 +826,16 @@ impl Rule {
                 input.domain.as_ref().is_some_and(|d| d.ends_with(suffix))
             }
             Rule::DomainKeyword(k) => input.domain.as_ref().is_some_and(|d| d.contains(k)),
-            Rule::IpCidr6(k) => input.ip.as_ref().is_some_and(|ip| {
+            Rule::IpCidr6(n) => input.ip.as_ref().is_some_and(|ip| {
                 if let IpAddr::V6(i) = ip {
-                    k.contains(i)
+                    n.contains(i)
                 } else {
                     false
                 }
             }),
-            Rule::IpCidr(k) => input.ip.as_ref().is_some_and(|ip| {
+            Rule::IpCidr(n) => input.ip.as_ref().is_some_and(|ip| {
                 if let IpAddr::V4(i) = ip {
-                    k.contains(i)
+                    n.contains(i)
                 } else {
                     false
                 }

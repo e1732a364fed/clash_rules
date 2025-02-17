@@ -77,7 +77,7 @@ pub fn get_rule_bloom(rules: &Vec<Vec<String>>) -> Bloom<&String> {
 fn bench_domain(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
-    let v = get_domain_rules(&hashmap).unwrap();
+    let v = hashmap.get(DOMAIN).unwrap();
     let ds = generate_test_domains(v, 0);
     let bloom = get_rule_bloom(v);
     // let map = get_target_item_map(v);
@@ -120,7 +120,7 @@ fn bench_domain(c: &mut Criterion) {
 fn bench_suffix(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
-    let v = get_suffix_rules(&hashmap).unwrap();
+    let v = hashmap.get(DOMAIN_SUFFIX).unwrap();
     let map = get_target_item_map(v);
     let ds = get_test_domains();
     let trie = gen_suffix_trie(&map);
@@ -142,7 +142,7 @@ fn bench_suffix(c: &mut Criterion) {
 fn bench_keyword(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
-    let v = get_keyword_rules(&hashmap).unwrap();
+    let v = hashmap.get(DOMAIN_KEYWORD).unwrap();
     let map = get_target_item_map(v);
     let ds = get_test_domains();
     let ac = gen_keywords_ac(&map);
@@ -175,7 +175,7 @@ fn bench_keyword(c: &mut Criterion) {
 fn bench_ip(c: &mut Criterion) {
     let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
-    let ip_rules = get_ip_cidr_rules(&rule_map).unwrap();
+    let ip_rules = rule_map.get(IP_CIDR).unwrap();
     let ip_map = get_target_item_map(ip_rules);
     let it = gen_ip_trie(&ip_map);
     let it2 = gen_ip_trie2(&ip_map);
