@@ -763,8 +763,8 @@ fn test_logic() {
 
 #[derive(Debug)]
 pub enum Rule {
-    And(Vec<Box<Rule>>),
-    Or(Vec<Box<Rule>>),
+    And(Vec<Rule>),
+    Or(Vec<Rule>),
     Not(Box<Rule>),
     Domain(String),
     DomainSuffix(String),
@@ -859,8 +859,16 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ParseRuleError {
+    #[error("no comma")]
+    NoComma,
     #[error("not wrapped with ()")]
-    E1,
+    NotWrappedBracket,
+    #[error("no sub rule")]
+    NoSubrule,
+    #[error("no bracket")]
+    NoBracket,
+    #[error("bracket should follow comma")]
+    E5,
     #[error("regex error")]
     Regex(#[from] regex::Error),
     #[error("parse ipcidr err")]
@@ -869,31 +877,33 @@ pub enum ParseRuleError {
     ParseNum(#[from] ParseIntError),
 }
 
+fn process_rules(rules: Vec<String>) -> Result<Vec<Rule>, ParseRuleError> {
+    rules.into_iter().map(|s| parse_rule(&s)).collect()
+}
+
 ///eg: DOMAIN-KEYWORD,bili
 ///eg: AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))
 pub fn parse_rule(input: &str) -> Result<Rule, ParseRuleError> {
     if input == MATCH {
         return Ok(Rule::Match);
     }
-    let (rt, r) = input.split_once(",").unwrap();
+    let (rt, r) = input.split_once(",").ok_or(ParseRuleError::NoComma)?;
 
     if rt.eq(AND) || rt.eq(OR) || rt.eq(NOT) {
         if !(r.starts_with('(') && r.ends_with(')')) {
-            return Err(ParseRuleError::E1);
+            return Err(ParseRuleError::NotWrappedBracket);
         }
         let r = &r[1..r.len() - 1];
-        let mut subrules: Vec<_> = extract_sub_rules_from(r)
-            .iter()
-            .map(|s| Box::new(parse_rule(s).unwrap()))
-            .collect();
+        let subrules: Vec<_> = extract_sub_rules_from(r)?;
+        let mut subrules = process_rules(subrules)?;
         let r = match rt {
             AND => Rule::And(subrules),
             OR => Rule::Or(subrules),
             NOT => {
-                let b = subrules.pop().unwrap();
-                Rule::Not(b)
+                let b = subrules.pop().ok_or(ParseRuleError::NoSubrule)?;
+                Rule::Not(Box::new(b))
             }
-            _ => unreachable!("ur"),
+            _ => unreachable!(""),
         };
         Ok(r)
     } else {
@@ -927,35 +937,33 @@ pub fn parse_rule(input: &str) -> Result<Rule, ParseRuleError> {
     }
 }
 
-/// panics if malformed.
-///
 /// input eg: (DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn)
 ///
 /// input eg: (AND,((DOMAIN,1),(DOMAIN,2))),(DOMAIN-REGEX,(?i)pcdn|mcdn)
-fn extract_sub_rules_from(input: &str) -> Vec<String> {
+fn extract_sub_rules_from(input: &str) -> Result<Vec<String>, ParseRuleError> {
     if input.starts_with('(') {
         let mut v = vec![];
         let mut lbi = 0;
         loop {
-            let rbi = find_matching_bracket(input, lbi).unwrap();
+            let rbi = find_matching_bracket(input, lbi).ok_or(ParseRuleError::NoBracket)?;
             let s = &input[lbi + 1..rbi];
             v.push(s.trim().to_string());
             if rbi + 1 == input.len() {
                 break;
             }
 
-            let commap = input[rbi + 1..].find(',').unwrap();
+            let commap = input[rbi + 1..].find(',').ok_or(ParseRuleError::NoComma)?;
             let bp = input[rbi + 1..].find('(').unwrap();
             if commap >= bp {
-                panic!("commap >= bp")
+                return Err(ParseRuleError::E5);
             }
 
             lbi = bp + rbi + 1;
         }
-        v
+        Ok(v)
     } else {
         let r = &input[1..input.len() - 1];
-        vec![r.trim().to_string()]
+        Ok(vec![r.trim().to_string()])
     }
 }
 
