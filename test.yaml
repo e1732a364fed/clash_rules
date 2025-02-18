@@ -3347,7 +3347,7 @@ rules:
   - DOMAIN-KEYWORD,fbcdn,Proxies
   - DOMAIN-KEYWORD,github,Proxies
   - DOMAIN-KEYWORD,gmail,Proxies
-  - DOMAIN-KEYWORD,google,Proxies
+  # - DOMAIN-KEYWORD,google,Proxies
   - DOMAIN-KEYWORD,instagram,Proxies
   - DOMAIN-KEYWORD,porn,Proxies
   - DOMAIN-KEYWORD,sci-hub,Proxies

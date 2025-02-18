@@ -432,24 +432,25 @@ pub fn check_ip6_trie(trie: &PrefixMap<Ipv6Net, usize>, ip6: Ipv6Addr) -> Option
 }
 
 #[cfg(test)]
-pub fn get_test_ips() -> Vec<Ipv4Addr> {
+pub fn get_test_ips() -> Vec<(Ipv4Addr, Option<&'static str>)> {
     vec![
-        Ipv4Addr::new(1, 2, 3, 4),
-        Ipv4Addr::new(2, 2, 3, 4),
-        Ipv4Addr::new(3, 2, 3, 4),
-        Ipv4Addr::new(15, 207, 213, 128),
+        (Ipv4Addr::new(1, 2, 3, 4), None),
+        (Ipv4Addr::new(2, 2, 3, 4), None),
+        (Ipv4Addr::new(3, 2, 3, 4), None),
+        (Ipv4Addr::new(15, 207, 213, 128), Some("Netflix")),
     ]
 }
+/// suffix target, keyword target
 #[cfg(test)]
-pub fn get_test_domains() -> Vec<&'static str> {
+pub fn get_test_domains() -> Vec<(&'static str, Option<&'static str>, Option<&'static str>)> {
     vec![
-        "www.google.com",
-        "jdj.reddit.com",
-        "hdjd.baidu.com",
-        "hshsh.djdjdj.djdj",
+        ("www.google.com", Some("Google"), Some("Google")),
+        ("jdj.reddit.com", Some("Proxies"), None),
+        ("hdjd.baidu.com", Some("🎯Direct"), Some("🎯Direct")),
+        ("hshsh.djdjdj.d", None, None),
     ]
 }
-/// cargo test -- --nocapture
+/// cargo test test_algorithms -- --nocapture
 #[cfg(feature = "serde_yaml_ng")]
 #[test]
 fn test_algorithms() {
@@ -474,13 +475,18 @@ fn test_algorithms() {
     let ac2_targets = get_keywords_targets(keyword_rules);
 
     let ds = get_test_domains();
-    for d in &ds {
+    for (d, st, kt) in &ds {
+        println!("{:?}", d);
         let r = check_suffix_trie(&trie, d);
-        println!("{:?}", r.map(|i| suffix_targets.get(i).unwrap()));
+        let r = r.map(|i| suffix_targets.get(i).unwrap().as_str());
+        println!("{:?}", r);
+        assert_eq!(r, *st);
         let r = check_keyword_ac(&ac, d);
         println!("{:?}", r);
-        let r = check_keyword_ac2(&ac2, d, &ac2_targets);
+        assert_eq!(r, *kt);
+        let r = check_keyword_ac2(&ac2, d, &ac2_targets).map(|s| s.as_str());
         println!("{:?}", r);
+        assert_eq!(r, *kt);
     }
 
     let ip_rules = rule_map.get(IP_CIDR).unwrap();
@@ -491,24 +497,31 @@ fn test_algorithms() {
     let it2 = gen_ip_trie2(&ip_map);
 
     let ips = get_test_ips();
-    for ip in &ips {
+    for (ip, t) in &ips {
+        println!("{:?}", ip);
         let r = check_ip_trie(&it, *ip);
-        println!("{:?}", r.map(|i| ip_targets.get(i).unwrap()));
+        let r = r.map(|i| ip_targets.get(i).unwrap().as_str());
+        println!("{:?}", r);
+        assert_eq!(r, *t);
         let r = check_ip_trie2(&it2, *ip);
-        println!("{:?}", r.map(|i| ip_targets.get(i).unwrap()));
+        let r = r.map(|i| ip_targets.get(i).unwrap().as_str());
+        println!("{:?}", r);
+        assert_eq!(r, *t);
     }
 
     let ip_rules = rule_map.get(IP_CIDR6).unwrap();
     println!("{:?}", ip_rules.len());
 
     let cm = ClashRuleMatcher::from_clash_config_file("test.yaml").unwrap();
-    for d in ds {
-        let r = cm.check_domain(d);
+    for (d, st, kt) in ds {
+        let r = cm.check_domain(d).map(|s| s.as_str());
         println!("{:?}", r);
+        assert!(r.eq(&st) || r.eq(&kt))
     }
-    for ip in ips {
-        let r = cm.check_ip(std::net::IpAddr::V4(ip));
+    for (ip, t) in ips {
+        let r = cm.check_ip(std::net::IpAddr::V4(ip)).map(|s| s.as_str());
         println!("{:?}", r);
+        assert_eq!(r, t);
         // #[cfg(feature = "maxminddb")]
         // let r = cm.check_ip_country(std::net::IpAddr::V4(ip));
         // println!("{:?}", r);
@@ -532,6 +545,18 @@ pub fn get_ip_iso_by_reader(ip: IpAddr, reader: &maxminddb::Reader<Vec<u8>>) -> 
     }
 }
 
+#[derive(Debug, Default)]
+pub struct DomainFullMatcher {
+    // store usize instead of using HashMap<String, String>,
+    // to save memory
+    pub map: HashMap<String, usize>,
+    pub targets: Vec<String>,
+}
+impl DomainFullMatcher {
+    pub fn check(&self, domain: &str) -> Option<&String> {
+        self.map.get(domain).and_then(|&i| self.targets.get(i))
+    }
+}
 #[derive(Debug)]
 pub struct DomainKeywordMatcher {
     pub ac: AhoCorasick,
@@ -585,7 +610,8 @@ impl Ip6Matcher {
 /// init mmdb_reader using maxminddb::Reader::from_source
 #[derive(Debug, Default)]
 pub struct ClashRuleMatcher {
-    pub domain_target_map: Option<HashMap<String, String>>,
+    // pub domain_target_map: Option<HashMap<String, String>>,
+    pub domain_full_matcher: Option<DomainFullMatcher>,
     pub domain_keyword_matcher: Option<DomainKeywordMatcher>,
     pub domain_suffix_matcher: Option<DomainSuffixMatcher>,
     pub domain_regex_set: Option<HashMap<String, regex::RegexSet>>,
@@ -614,7 +640,16 @@ impl ClashRuleMatcher {
         let mut s = Self::default();
 
         if let Some(v) = method_rules_map.get(DOMAIN) {
-            s.domain_target_map = Some(get_item_target_map(v));
+            let domain_target_map = get_item_target_map(v);
+            let vs: Vec<String> = domain_target_map.values().map(|s| s.to_string()).collect();
+            let m = domain_target_map
+                .into_iter()
+                .map(|(k, v)| (k, vs.iter().position(|x| x.eq(&v)).unwrap()))
+                .collect();
+            s.domain_full_matcher = Some(DomainFullMatcher {
+                map: m,
+                targets: vs,
+            });
             method_rules_map.remove(DOMAIN);
         }
         #[cfg(feature = "maxminddb")]
@@ -722,12 +757,17 @@ impl ClashRuleMatcher {
                 parse_rule_set_as_domain_suffix_trie(&mut matcher.trie, &mut rs.payload, target_id);
                 self.domain_suffix_matcher = Some(matcher);
                 if !rs.payload.is_empty(){
-                    let mut m = self.domain_target_map.take().unwrap_or_default();
+                    let mut m = self.domain_full_matcher.take().unwrap_or_default();
+                    let target_id = m.targets.iter().position(|x| x.eq(target)).unwrap_or_else(|| {
+                        let l = m.targets.len();
+                        m.targets.push(target.to_string());
+                        l
+                    });
                     rs.payload.iter().for_each(|d| {
-                        m.insert(d.to_string(), target.to_string());
+                        m.map.insert(d.to_string(), target_id);
                     });
 
-                    self.domain_target_map= Some(m);
+                    self.domain_full_matcher= Some(m);
 
                 }
             },
@@ -801,8 +841,8 @@ impl ClashRuleMatcher {
 
     /// returns the target if matched
     pub fn check_domain(&self, domain: &str) -> Option<&String> {
-        if let Some(m) = &self.domain_target_map {
-            let r = m.get(domain);
+        if let Some(m) = &self.domain_full_matcher {
+            let r = m.check(domain);
             if r.is_some() {
                 return r;
             }
