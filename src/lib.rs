@@ -67,6 +67,11 @@ pub fn to_clash_rule_name(rule_name: &str) -> String {
 pub struct RuleSet {
     pub payload: Vec<String>,
 }
+pub enum RuleSetType {
+    Domain,
+    Ipcidr,
+    Classical,
+}
 #[derive(Debug)]
 pub enum LoadYamlFileError {
     FileErr(std::io::Error),
@@ -108,34 +113,41 @@ pub fn load_rule_set_from_str(s: &str) -> Result<RuleSet, serde_yaml_ng::Error> 
     Ok(ruleset)
 }
 
-/// init like let mut trie = Trie::new();
+/// init like: let mut trie = Trie::new();
+///
+/// will add items in payload that start with '+' which marks as DOMAIN-SUFFIX
 pub fn parse_rule_set_as_domain_suffix_trie(
-    mut trie: Trie<String, usize>,
-    payload: &[String],
+    trie: &mut Trie<String, usize>,
+    payload: &mut Vec<String>,
     target_id: usize,
 ) {
-    for v in payload.iter() {
-        let mut r: String = v.chars().rev().collect();
-        // RULESET 中 表示 suffix 的 字符串 有个 加号末尾（逆序后）
-        r = r.trim_end_matches('+').to_string();
-        trie.insert(r, target_id);
-    }
+    payload.retain(|x| {
+        let ok = x.starts_with('+');
+        if ok {
+            let mut r: String = x.chars().rev().collect();
+            r = r.trim_end_matches('+').to_string();
+            trie.insert(r, target_id);
+        }
+
+        !ok
+    });
 }
 
 /// init like let mut trie = PrefixMap::<Ipv4Net, usize>::new();
 pub fn parse_rule_set_as_ip_cidr_trie(
-    mut trie: PrefixMap<Ipv4Net, usize>,
-    mut trie6: PrefixMap<Ipv6Net, usize>,
+    trie: &mut PrefixMap<Ipv4Net, usize>,
+    trie6: &mut PrefixMap<Ipv6Net, usize>,
     payload: &[String],
-    target_id: usize,
+    target_id_for_v4: usize,
+    target_id_for_v6: usize,
 ) {
     for v in payload.iter() {
         let r: Result<Ipv4Net, <Ipv4Net as std::str::FromStr>::Err> = v.parse();
         match r {
-            Ok(r) => trie.insert(r, target_id),
+            Ok(r) => trie.insert(r, target_id_for_v4),
             Err(_) => {
                 let r: Ipv6Net = v.parse().unwrap();
-                trie6.insert(r, target_id)
+                trie6.insert(r, target_id_for_v6)
             }
         };
     }
@@ -535,12 +547,20 @@ pub struct DomainSuffixMatcher {
     pub trie: Trie<String, usize>,
     pub targets: Vec<String>,
 }
+impl Default for DomainSuffixMatcher {
+    fn default() -> Self {
+        Self {
+            trie: Trie::new(),
+            targets: vec![],
+        }
+    }
+}
 impl DomainSuffixMatcher {
     pub fn check(&self, domain: &str) -> Option<&String> {
         check_suffix_trie(&self.trie, domain).map(|i| self.targets.get(i).unwrap())
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct IpMatcher {
     pub trie: PrefixMap<Ipv4Net, usize>,
     pub targets: Vec<String>,
@@ -550,7 +570,7 @@ impl IpMatcher {
         check_ip_trie(&self.trie, ip).map(|i| self.targets.get(i).unwrap())
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Ip6Matcher {
     pub trie: PrefixMap<Ipv6Net, usize>,
     pub targets: Vec<String>,
@@ -682,6 +702,57 @@ impl ClashRuleMatcher {
     pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, ParseRuleError> {
         let s = std::fs::read_to_string(path)?;
         Self::from_clash_config_str(&s)
+    }
+
+    /// RuleSetType must be Ipcidr or Domain, can't be Classical, as
+    /// classical rules can't be merged after the ClashRuleMatcher was created.
+    ///
+    /// If you want to merge classical ruleset, merge it as HashMap and
+    /// use the merged HashMap to create the ClashRuleMatcher.
+    pub fn append_rule_set(&mut self, t: RuleSetType, mut rs: RuleSet, target: &str) {
+        match t {
+            RuleSetType::Domain => {
+                let mut matcher = self.domain_suffix_matcher.take().unwrap_or_default();
+                let target_id = matcher.targets.iter().position(|x| x.eq(target)).unwrap_or_else(|| {
+                    let l = matcher.targets.len();
+                    matcher.targets.push(target.to_string());
+                    l
+                });
+
+                parse_rule_set_as_domain_suffix_trie(&mut matcher.trie, &mut rs.payload, target_id);
+                self.domain_suffix_matcher = Some(matcher);
+                if !rs.payload.is_empty(){
+                    let mut m = self.domain_target_map.take().unwrap_or_default();
+                    rs.payload.iter().for_each(|d| {
+                        m.insert(d.to_string(), target.to_string());
+                    });
+
+                    self.domain_target_map= Some(m);
+
+                }
+            },
+            RuleSetType::Ipcidr => {
+                let mut matcher4 = self.ip4_matcher.take().unwrap_or_default();
+                let mut matcher6 = self.ip6_matcher.take().unwrap_or_default();
+                let target_id4 = matcher4.targets.iter().position(|x| x.eq(target)).unwrap_or_else(|| {
+                    let l = matcher4.targets.len();
+                    matcher4.targets.push(target.to_string());
+                    l
+                });
+                let target_id6 = matcher6.targets.iter().position(|x| x.eq(target)).unwrap_or_else(|| {
+                    let l = matcher6.targets.len();
+                    matcher6.targets.push(target.to_string());
+                    l
+                });
+
+                parse_rule_set_as_ip_cidr_trie(&mut matcher4.trie, &mut matcher6.trie, &rs.payload, target_id4, target_id6);
+
+                    self.ip4_matcher= Some(matcher4);
+                    self.ip6_matcher= Some(matcher6);
+
+            },
+            RuleSetType::Classical => panic!("can not merge classical ruleset afterwards. Merge as HashMap before creating ClashRuleMatcher."),
+        }
     }
 
     /// returns the target if matched
