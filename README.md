@@ -1,8 +1,8 @@
-This project can parse the rules in Clash’s YAML configuration files and provides an optimized matching algorithm.
+This project can parse the rules and rule-sets in Clash’s YAML configuration files and provides an optimized matching algorithm.
 The project uses functional programming.
 
 DOMAIN-SUFFIX, IP-CIDR(6) uses radix trie ，DOMAIN-KEYWORD uses Aho-Corasick Automaton.
-DOMAIN-REGEX uses RegexSet.
+DOMAIN-REGEX uses RegexSet. PORT uses binary search.
 
 For examples, see the test at the end of the lib.rs and benches/algorithms.
 

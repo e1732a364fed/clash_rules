@@ -1150,6 +1150,42 @@ impl ClashRuleMatcher {
         None
     }
 }
+/// cargo test test_ruleset -- --nocapture
+#[test]
+fn test_ruleset() {
+    let f1 = load_rule_set_from_file("rs-applications.txt").unwrap();
+    let f2 = load_rule_set_from_file("rs-private.txt").unwrap();
+    let f3 = load_rule_set_from_file("rs-telegramcidr.txt").unwrap();
+    let mut h = HashMap::new();
+    h.insert("a".to_string(), (f1, RuleSetType::Classical));
+    h.insert("b".to_string(), (f2, RuleSetType::Domain));
+    h.insert("c".to_string(), (f3, RuleSetType::Ipcidr));
+    let mut rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
+    rule_map
+        .entry(RULE_SET.to_string())
+        .or_default()
+        .extend(vec![
+            vec!["a".to_string(), "direct0".to_string()],
+            vec!["b".to_string(), "direct1".to_string()],
+            vec!["c".to_string(), "telegram".to_string()],
+        ]);
+    let m = ClashRuleMatcher::from_rules_and_ruleset_contents(rule_map, h).unwrap();
+    assert_eq!("direct1", m.check_domain("test.f.test").unwrap());
+    assert_eq!("direct1", m.check_domain("test.f.lan").unwrap());
+    // println!("{:?}", m.check_ip4(Ipv4Addr::LOCALHOST));
+    assert_eq!(
+        "telegram",
+        m.check_ip4("91.105.192.0".parse().unwrap()).unwrap()
+    );
+    assert_eq!(
+        "direct0",
+        m.matches(&RuleInput {
+            process_name: Some("Thunder".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+    );
+}
 
 /// All supported clash rules
 #[derive(Debug)]
