@@ -943,6 +943,48 @@ impl ClashRuleMatcher {
         let s = std::fs::read_to_string(path)?;
         Self::from_clash_config_str(&s)
     }
+    pub fn from_rules_and_ruleset_contents(
+        mut rules: HashMap<String, Vec<Vec<String>>>,
+        mut ruleset_contents: HashMap<String, (RuleSet, RuleSetType)>,
+    ) -> Result<Self, ParseRuleError> {
+        let ruleset_rules = rules.remove(RULE_SET);
+        match ruleset_rules {
+            None => Self::from_hashmap(rules),
+            Some(rsr) => {
+                let mut left_rulesets = vec![];
+
+                for rr in rsr {
+                    let rn = rr.first().unwrap();
+                    let t = rr.last().unwrap();
+                    let (mut rs, rt) = ruleset_contents.remove(rn).unwrap();
+
+                    match rt {
+                        RuleSetType::Domain => {
+                            let x = parse_rule_set_as_domain_regex_by_wildcard(&mut rs.payload, t);
+
+                            rules.entry(DOMAIN_REGEX.to_string()).or_default().extend(x);
+
+                            if !rs.payload.is_empty() {
+                                left_rulesets.push((rs, rt, t.to_string()));
+                            }
+                        }
+                        RuleSetType::Ipcidr => {
+                            left_rulesets.push((rs, rt, t.to_string()));
+                        }
+                        RuleSetType::Classical => {
+                            let x = parse_rule_set_as_classic(&rs.payload, t.to_string());
+                            rules = merge_method_rules_map(rules, x);
+                        }
+                    }
+                }
+                let mut s = Self::from_hashmap(rules)?;
+                for r in left_rulesets {
+                    s.append_rule_set(r.1, r.0, &r.2);
+                }
+                Ok(s)
+            }
+        }
+    }
 
     /// RuleSetType must be Ipcidr or Domain, can't be Classical, as
     /// classical rules can't be merged after the ClashRuleMatcher was created.
@@ -953,6 +995,8 @@ impl ClashRuleMatcher {
     /// Also any domain rules with wildcard must be treated early with
     /// parse_rule_set_as_domain_regex_by_wildcard and insert into the
     /// HashMap before initialize ClashRuleMatcher.
+    ///
+    /// see from_rules_and_ruleset_contents.
     pub fn append_rule_set(&mut self, t: RuleSetType, mut rs: RuleSet, target: &str) {
         match t {
             RuleSetType::Domain => {
@@ -1132,10 +1176,14 @@ pub enum Rule {
 /// the struct stores all possible rule inputs for checking
 #[derive(Default, Debug)]
 pub struct RuleInput {
+    /// dst domain.
+    ///
     /// must be lowercase, it is caller's duty to pass in a lowercase domain
     pub domain: Option<String>,
     pub process_name: Option<String>,
     pub network: Option<String>,
+
+    /// dst ip
     pub ip: Option<IpAddr>,
     pub in_port: Option<u16>,
     pub dst_port: Option<u16>,
