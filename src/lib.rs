@@ -254,11 +254,22 @@ pub fn gen_keywords_ac(
         .collect()
 }
 
+/// returns a vec that may contain repeat items, for ac2 matching.
+///
+/// the result vec len is exactly equal to the input vec.
 pub fn get_keywords_targets(rules: &[Vec<String>]) -> Vec<String> {
     rules.iter().filter_map(|v| v.get(1).cloned()).collect()
 }
+
+/// Unlike gen_keywords_ac, it stores all keywords at onces, instead of
+/// gen one ac for each target. It then requries a target list for getting the result.
+///
+/// it store all chars in lowercase
 pub fn gen_keywords_ac2(rules: &[Vec<String>]) -> AhoCorasick {
-    let result: Vec<String> = rules.iter().filter_map(|v| v.first().cloned()).collect();
+    let result: Vec<String> = rules
+        .iter()
+        .filter_map(|v| v.first().map(|s| s.to_lowercase()))
+        .collect();
 
     AhoCorasick::new(&result).unwrap()
 }
@@ -327,6 +338,8 @@ pub fn gen_prefix_trie<T: AsRef<str>>(target_item_map: &HashMap<T, Vec<T>>) -> T
 
 /// the function store domain chars in the result trie in reversed order, and
 /// with their target index of the map
+///
+/// it will store all chars in ascii lowercase
 pub fn gen_suffix_trie<T: AsRef<str>>(
     target_suffix_map: &HashMap<T, Vec<T>>,
 ) -> Trie<String, usize> {
@@ -334,7 +347,12 @@ pub fn gen_suffix_trie<T: AsRef<str>>(
 
     for (i, (_key, value)) in target_suffix_map.iter().enumerate() {
         for v in value {
-            let r: String = v.as_ref().chars().rev().collect();
+            let r: String = v
+                .as_ref()
+                .chars()
+                .map(|c| c.to_ascii_lowercase())
+                .rev()
+                .collect();
             trie.insert(r, i);
         }
     }
@@ -362,6 +380,11 @@ where
 pub fn check_suffix_trie(trie: &Trie<String, usize>, domain: &str) -> Option<usize> {
     let sr: String = domain.chars().rev().collect();
     if let Some(subtree) = trie.get_ancestor(&sr) {
+        let k = subtree.key().unwrap();
+        let kl = k.len();
+        if kl < sr.len() && sr.as_bytes()[kl] != b'.' {
+            return None;
+        }
         subtree.value().cloned()
     } else {
         None
@@ -445,6 +468,8 @@ pub fn get_test_ips() -> Vec<(Ipv4Addr, Option<&'static str>)> {
 #[cfg(test)]
 pub fn get_test_domains() -> Vec<(&'static str, Option<&'static str>, Option<&'static str>)> {
     vec![
+        ("wwgoogle.com", None, Some("Google")),
+        ("google.com", Some("Google"), Some("Google")),
         ("www.google.com", Some("Google"), Some("Google")),
         ("jdj.reddit.com", Some("Proxies"), None),
         ("hdjd.baidu.com", Some("🎯Direct"), Some("🎯Direct")),
@@ -474,6 +499,7 @@ fn test_algorithms() {
     let ac = gen_keywords_ac(&kmap);
     let ac2 = gen_keywords_ac2(keyword_rules);
     let ac2_targets = get_keywords_targets(keyword_rules);
+    // println!("{:?}", ac2_targets);
 
     let ds = get_test_domains();
     for (d, st, kt) in &ds {
@@ -644,7 +670,7 @@ impl ClashRuleMatcher {
             let vs: Vec<String> = domain_target_map.values().map(|s| s.to_string()).collect();
             let m = domain_target_map
                 .into_iter()
-                .map(|(k, v)| (k, vs.iter().position(|x| x.eq(&v)).unwrap()))
+                .map(|(k, v)| (k.to_lowercase(), vs.iter().position(|x| x.eq(&v)).unwrap()))
                 .collect();
             s.domain_full_matcher = Some(DomainFullMatcher {
                 map: m,
@@ -667,8 +693,7 @@ impl ClashRuleMatcher {
             method_rules_map.remove(DOMAIN_REGEX);
         }
         if let Some(v) = method_rules_map.get(DOMAIN_KEYWORD) {
-            let map = get_target_item_map(v);
-            let targets = map.keys().cloned().collect();
+            let targets = get_keywords_targets(v);
             let ac = gen_keywords_ac2(v);
             s.domain_keyword_matcher = Some(DomainKeywordMatcher { ac, targets });
             method_rules_map.remove(DOMAIN_KEYWORD);
@@ -840,6 +865,8 @@ impl ClashRuleMatcher {
     }
 
     /// returns the target if matched
+    ///
+    /// must be lowercase, it is caller's duty to pass in a lowercase domain
     pub fn check_domain(&self, domain: &str) -> Option<&String> {
         if let Some(m) = &self.domain_full_matcher {
             let r = m.check(domain);
@@ -917,6 +944,7 @@ pub enum Rule {
 /// the struct stores all possible rule inputs for checking
 #[derive(Default, Debug)]
 pub struct RuleInput {
+    /// must be lowercase, it is caller's duty to pass in a lowercase domain
     pub domain: Option<String>,
     pub process_name: Option<String>,
     pub network: Option<String>,

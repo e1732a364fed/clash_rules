@@ -19,13 +19,17 @@ pub fn get_test_ips() -> Vec<Ipv4Addr> {
 }
 pub fn get_test_domains() -> Vec<&'static str> {
     vec![
+        "google.com",
+        "wwgoogle.com",
         "www.google.com",
         "jdj.reddit.com",
         "hdjd.baidu.com",
         "hshsh.djdjdj.djdj",
     ]
 }
-pub fn generate_test_domains(rules: &Vec<Vec<String>>, seed: u64) -> Vec<String> {
+
+/// get 3 times len
+pub fn more_test_domains(rules: &Vec<Vec<String>>, seed: u64) -> Vec<String> {
     let mut v = vec![];
     for x in rules {
         let domain = x.first().unwrap();
@@ -39,7 +43,7 @@ pub fn generate_test_domains(rules: &Vec<Vec<String>>, seed: u64) -> Vec<String>
             let s: String = (0..length)
                 .map(|_| rng.sample(Alphanumeric) as char)
                 .collect();
-            vec.push(s);
+            vec.push(s.to_lowercase());
         }
     }
 
@@ -78,7 +82,7 @@ fn bench_domain(c: &mut Criterion) {
     let hashmap = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let v = hashmap.get(DOMAIN).unwrap();
-    let ds = generate_test_domains(v, 0);
+    let ds = more_test_domains(v, 0);
     let bloom = get_rule_bloom(v);
     // let map = get_target_item_map(v);
     let map2 = get_item_target_map(v);
@@ -123,6 +127,7 @@ fn bench_suffix(c: &mut Criterion) {
     let v = hashmap.get(DOMAIN_SUFFIX).unwrap();
     let map = get_target_item_map(v);
     let ds = get_test_domains();
+    let ds2 = more_test_domains(v, 0);
     let trie = gen_suffix_trie(&map);
     c.bench_function("trie_suffix", |b| {
         b.iter(|| {
@@ -134,6 +139,20 @@ fn bench_suffix(c: &mut Criterion) {
     c.bench_function("dummy_suffix", |b| {
         b.iter(|| {
             ds.iter().for_each(|d| {
+                check_suffix_dummy(&map, d);
+            });
+        })
+    });
+    c.bench_function("trie_suffix_more", |b| {
+        b.iter(|| {
+            ds2.iter().for_each(|d| {
+                check_suffix_trie(&trie, d);
+            });
+        })
+    });
+    c.bench_function("dummy_suffix_more", |b| {
+        b.iter(|| {
+            ds2.iter().for_each(|d| {
                 check_suffix_dummy(&map, d);
             });
         })
