@@ -20,6 +20,7 @@ use std::num::ParseIntError;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
 pub const DOMAIN: &str = "DOMAIN";
 pub const DOMAIN_SUFFIX: &str = "DOMAIN-SUFFIX";
 pub const DOMAIN_KEYWORD: &str = "DOMAIN-KEYWORD";
@@ -34,7 +35,7 @@ pub const AND: &str = "AND";
 pub const OR: &str = "OR";
 pub const NOT: &str = "NOT";
 pub const MATCH: &str = "MATCH";
-///
+
 /// all supported rules
 pub const RULE_TYPES: &[&str] = &[
     DOMAIN,
@@ -52,9 +53,12 @@ pub const RULE_TYPES: &[&str] = &[
     OR,
     NOT,
 ];
+
+/// to lowercase and - to _
 pub fn to_sql_table_name(rule_name: &str) -> String {
     rule_name.replace("-", "_").to_lowercase()
 }
+/// to uppercase and _ to -
 pub fn to_clash_rule_name(rule_name: &str) -> String {
     rule_name.replace("_", "-").to_uppercase()
 }
@@ -153,6 +157,7 @@ pub fn parse_rule_set_as_classic(
     hashmap
 }
 
+/// Contains the clash rule lines
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RuleConfig {
     pub rules: Vec<String>,
@@ -169,6 +174,7 @@ pub fn load_rules_from_str(s: &str) -> Result<RuleConfig, serde_yaml_ng::Error> 
     Ok(rs)
 }
 
+/// parse a single clahs rule line by spliting with ',', the ',' splitted items is pushed in the inner Vec
 pub fn parse_line(rule: &str) -> Option<(&str, Vec<String>)> {
     let mut parts = rule.split(',');
     if let Some(key) = parts.next() {
@@ -190,6 +196,7 @@ pub fn parse_rules(rc: &RuleConfig) -> HashMap<String, Vec<Vec<String>>> {
     hashmap
 }
 
+/// merge two into a new one
 pub fn merge_method_rules_map(
     map1: HashMap<String, Vec<Vec<String>>>,
     map2: HashMap<String, Vec<Vec<String>>>,
@@ -433,7 +440,7 @@ pub fn get_test_domains() -> Vec<&'static str> {
 /// cargo test -- --nocapture
 #[cfg(feature = "serde_yaml_ng")]
 #[test]
-fn test() {
+fn test_algorithms() {
     let rule_map = parse_rules(&load_rules_from_file("test.yaml").unwrap());
 
     let dr = rule_map.get(DOMAIN).unwrap();
@@ -496,7 +503,7 @@ fn test() {
     }
 }
 #[cfg(feature = "maxminddb")]
-/// <https://en.wikipedia.org/wiki/List_of_ISO_3166_country_codes>
+/// return the iso 3166 code, see <https://en.wikipedia.org/wiki/List_of_ISO_3166_country_codes>
 pub fn get_ip_iso_by_reader(ip: IpAddr, reader: &maxminddb::Reader<Vec<u8>>) -> &str {
     let r = reader.lookup(ip);
     let c: maxminddb::geoip2::Country = match r {
@@ -554,7 +561,7 @@ impl Ip6Matcher {
     }
 }
 
-/// convenient struct for checking all rules.
+/// Convenient struct for checking all rules.
 /// init mmdb_reader using maxminddb::Reader::from_source
 #[derive(Debug, Default)]
 pub struct ClashRuleMatcher {
@@ -632,11 +639,10 @@ impl ClashRuleMatcher {
             s.ip6_matcher = Some(Ip6Matcher { trie, targets });
             method_rules_map.remove(IP_CIDR6);
         }
-        let mt = method_rules_map.remove("MATCH");
+        let mt = method_rules_map.remove(MATCH);
 
         for (rt, item) in method_rules_map {
             for mut content in item {
-                // println!("parsing {ss:?}");
                 let target = if content.len() > 1 {
                     content.remove(1)
                 } else {
@@ -660,24 +666,25 @@ impl ClashRuleMatcher {
             }
         }
 
-        // println!("{:?}", s.rules);
         Ok(s)
     }
-    #[cfg(feature = "serde_yaml_ng")]
-    pub fn from_clash_config_str(cs: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let method_rules_map = parse_rules(&load_rules_from_str(cs)?);
+    pub fn from_clash_rules(rc: &RuleConfig) -> Result<Self, ParseRuleError> {
+        let method_rules_map = parse_rules(rc);
 
-        Ok(Self::from_hashmap(method_rules_map)?)
+        Self::from_hashmap(method_rules_map)
     }
     #[cfg(feature = "serde_yaml_ng")]
-    pub fn from_clash_config_file<P: AsRef<Path>>(
-        path: P,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_clash_config_str(cs: &str) -> Result<Self, ParseRuleError> {
+        let rc = load_rules_from_str(cs)?;
+        Self::from_clash_rules(&rc)
+    }
+    #[cfg(feature = "serde_yaml_ng")]
+    pub fn from_clash_config_file<P: AsRef<Path>>(path: P) -> Result<Self, ParseRuleError> {
         let s = std::fs::read_to_string(path)?;
-        let s = Self::from_clash_config_str(&s)?;
-        Ok(s)
+        Self::from_clash_config_str(&s)
     }
 
+    /// returns the target if matched
     pub fn check_ip4(&self, ip: Ipv4Addr) -> Option<&String> {
         if let Some(m) = &self.ip4_matcher {
             m.check(ip)
@@ -685,6 +692,7 @@ impl ClashRuleMatcher {
             None
         }
     }
+    /// returns the target if matched
     pub fn check_ip6(&self, ip: Ipv6Addr) -> Option<&String> {
         if let Some(m) = &self.ip6_matcher {
             m.check(ip)
@@ -692,12 +700,15 @@ impl ClashRuleMatcher {
             None
         }
     }
+    /// returns the target if matched
     pub fn check_ip(&self, ip: std::net::IpAddr) -> Option<&String> {
         match ip {
             std::net::IpAddr::V4(ipv4_addr) => self.check_ip4(ipv4_addr),
             std::net::IpAddr::V6(ipv6_addr) => self.check_ip6(ipv6_addr),
         }
     }
+
+    /// returns the iso of the ip
     #[cfg(feature = "maxminddb")]
     pub fn check_ip_country_iso(&self, ip: std::net::IpAddr) -> &str {
         if let Some(m) = &self.mmdb_reader {
@@ -706,6 +717,7 @@ impl ClashRuleMatcher {
             ""
         }
     }
+    /// returns the target if matched
     #[cfg(feature = "maxminddb")]
     pub fn check_ip_country(&self, ip: std::net::IpAddr) -> Option<&String> {
         if let Some(m) = &self.country_target_map {
@@ -716,6 +728,7 @@ impl ClashRuleMatcher {
         }
     }
 
+    /// returns the target if matched
     pub fn check_domain(&self, domain: &str) -> Option<&String> {
         if let Some(m) = &self.domain_target_map {
             let r = m.get(domain);
@@ -744,6 +757,7 @@ impl ClashRuleMatcher {
         }
         None
     }
+    /// returns the target if matched
     pub fn matches(&self, input: &RuleInput) -> Option<&String> {
         let dt = input.domain.as_ref().and_then(|d| self.check_domain(d));
         if dt.is_some() {
@@ -789,6 +803,7 @@ pub enum Rule {
     Other(String, String),
 }
 
+/// the struct stores all possible rule inputs for checking
 #[derive(Default, Debug)]
 pub struct RuleInput {
     pub domain: Option<String>,
@@ -797,7 +812,7 @@ pub struct RuleInput {
     pub ip: Option<IpAddr>,
     pub dst_port: Option<u16>,
 
-    /// for geoip
+    /// for geoip (as different mmdb can give different results)
     #[cfg(feature = "maxminddb")]
     pub mmdb_reader: Option<std::sync::Arc<maxminddb::Reader<Vec<u8>>>>,
 }
@@ -897,8 +912,15 @@ impl Rule {
 
 use thiserror::Error;
 
+// The parsing error type of the crate
 #[derive(Error, Debug)]
 pub enum ParseRuleError {
+    #[cfg(feature = "serde_yaml_ng")]
+    #[error("parse yaml err")]
+    ParseYaml(#[from] serde_yaml_ng::Error),
+    #[error("read file err")]
+    FileErr(#[from] std::io::Error),
+
     #[error("no comma")]
     NoComma,
     #[error("not wrapped with ()")]
@@ -921,7 +943,7 @@ fn process_rules(rules: Vec<String>) -> Result<Vec<Rule>, ParseRuleError> {
     rules.into_iter().map(|s| parse_rule(&s)).collect()
 }
 
-///parse a clash rule line without target
+///parse a clash rule line without target, mainly for logic rules.
 ///
 ///eg: DOMAIN-KEYWORD,bili
 ///eg: AND,((DOMAIN-KEYWORD,bili),(DOMAIN-REGEX,(?i)pcdn|mcdn))
