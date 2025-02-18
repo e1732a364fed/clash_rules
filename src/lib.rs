@@ -21,6 +21,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub const RULE_SET: &str = "RULE-SET";
 pub const DOMAIN: &str = "DOMAIN";
 pub const DOMAIN_SUFFIX: &str = "DOMAIN-SUFFIX";
 pub const DOMAIN_KEYWORD: &str = "DOMAIN-KEYWORD";
@@ -29,6 +30,8 @@ pub const IP_CIDR: &str = "IP-CIDR";
 pub const IP_CIDR6: &str = "IP-CIDR6";
 pub const PROCESS_NAME: &str = "PROCESS-NAME";
 pub const DST_PORT: &str = "DST-PORT";
+pub const SRC_PORT: &str = "SRC-PORT";
+pub const IN_PORT: &str = "IN-PORT";
 pub const GEOIP: &str = "GEOIP";
 pub const NETWORK: &str = "NETWORK";
 pub const AND: &str = "AND";
@@ -36,7 +39,7 @@ pub const OR: &str = "OR";
 pub const NOT: &str = "NOT";
 pub const MATCH: &str = "MATCH";
 
-/// all supported rules
+/// all supported rules (without RULE-SET)
 pub const RULE_TYPES: &[&str] = &[
     DOMAIN,
     DOMAIN_KEYWORD,
@@ -46,6 +49,8 @@ pub const RULE_TYPES: &[&str] = &[
     IP_CIDR6,
     PROCESS_NAME,
     DST_PORT,
+    SRC_PORT,
+    IN_PORT,
     GEOIP,
     NETWORK,
     MATCH,
@@ -1116,7 +1121,9 @@ pub enum Rule {
     IpCidr6(Ipv6Net),
     GeoIp(String),
     Network(String),
+    InPort(PortMatcher),
     DstPort(PortMatcher),
+    SrcPort(PortMatcher),
     ProcessName(String),
     Match,
     Other(String, String),
@@ -1130,7 +1137,9 @@ pub struct RuleInput {
     pub process_name: Option<String>,
     pub network: Option<String>,
     pub ip: Option<IpAddr>,
+    pub in_port: Option<u16>,
     pub dst_port: Option<u16>,
+    pub src_port: Option<u16>,
 
     /// for geoip (as different mmdb can give different results)
     #[cfg(feature = "maxminddb")]
@@ -1146,7 +1155,9 @@ impl Rule {
             MATCH => Rule::Match,
             PROCESS_NAME => Rule::ProcessName(r.to_string()),
             NETWORK => Rule::Network(r.to_string()),
+            IN_PORT => Rule::InPort(PortMatcher::new(r)),
             DST_PORT => Rule::DstPort(PortMatcher::new(r)),
+            SRC_PORT => Rule::SrcPort(PortMatcher::new(r)),
             DOMAIN_SUFFIX => Rule::DomainSuffix(r.to_string()),
             DOMAIN_KEYWORD => Rule::DomainKeyword(r.to_string()),
             DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(r)?),
@@ -1224,7 +1235,9 @@ impl Rule {
                     false
                 }
             }),
+            Rule::InPort(pm) => input.in_port.is_some_and(|rd| pm.matches(rd)),
             Rule::DstPort(pm) => input.dst_port.is_some_and(|rd| pm.matches(rd)),
+            Rule::SrcPort(pm) => input.src_port.is_some_and(|rd| pm.matches(rd)),
             _ => false,
         }
     }

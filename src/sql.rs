@@ -112,7 +112,7 @@ pub fn query_rules_view(
 }
 
 pub fn insert_rule_with_target(
-    conn: &rusqlite::Transaction,
+    tx: &rusqlite::Transaction,
     rule: &Rule,
     target: Option<&str>,
     parent_id: Option<i32>,
@@ -120,11 +120,11 @@ pub fn insert_rule_with_target(
     // println!("irwt {rule:?}");
     // 1.
     let target_id: Option<i32> = if target.is_some() {
-        conn.execute(
+        tx.execute(
         "INSERT INTO targets (target) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM targets WHERE target = ?);",
         params![target, target],
     )?;
-        conn.query_row(
+        tx.query_row(
             "SELECT id FROM targets WHERE target = ?;",
             params![target],
             |row| row.get(0),
@@ -141,16 +141,16 @@ pub fn insert_rule_with_target(
                 Rule::Or(_) => OR,
                 _ => unreachable!(),
             };
-            conn.execute(
+            tx.execute(
                 "INSERT INTO logic_groups (logic, target, parent_id) VALUES (?, ?, ?);",
                 params![logic_type, target_id, parent_id],
             )?;
             let logic_group_id: i32 =
-                conn.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
+                tx.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
 
             // 3. 递归插入子规则
             for sub_rule in rules {
-                insert_rule_with_target(conn, sub_rule, None, Some(logic_group_id))?;
+                insert_rule_with_target(tx, sub_rule, None, Some(logic_group_id))?;
             }
 
             Ok(Some(logic_group_id))
@@ -158,15 +158,15 @@ pub fn insert_rule_with_target(
 
         Rule::Not(sub_rule) => {
             // 2. 插入 logic_groups 表
-            conn.execute(
+            tx.execute(
                 "INSERT INTO logic_groups (logic, target, parent_id) VALUES ('NOT', ?, ?);",
                 params![target_id, parent_id],
             )?;
             let logic_group_id: i32 =
-                conn.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
+                tx.query_row("SELECT last_insert_rowid();", [], |row| row.get(0))?;
 
             // 3. 递归插入子规则
-            insert_rule_with_target(conn, sub_rule, None, Some(logic_group_id))?;
+            insert_rule_with_target(tx, sub_rule, None, Some(logic_group_id))?;
 
             Ok(Some(logic_group_id))
         }
@@ -191,7 +191,7 @@ pub fn insert_rule_with_target(
                 "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
                 table_name
             );
-            conn.execute(&query, params![content, target_id, parent_id])?;
+            tx.execute(&query, params![content, target_id, parent_id])?;
             Ok(None)
         }
 
@@ -201,7 +201,7 @@ pub fn insert_rule_with_target(
                 "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
                 table_name
             );
-            conn.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
+            tx.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
             Ok(None)
         }
         Rule::IpCidr6(ipn) => {
@@ -210,20 +210,34 @@ pub fn insert_rule_with_target(
                 "INSERT INTO {} (content, target, logic_group_id) VALUES (?, ?, ?);",
                 table_name
             );
-            conn.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
+            tx.execute(&query, params![ipn.to_string(), target_id, parent_id])?;
             Ok(None)
         }
 
+        Rule::SrcPort(port) => {
+            tx.execute(
+                "INSERT INTO src_port (content, target, logic_group_id) VALUES (?, ?, ?);",
+                params![port.to_string(), target_id, parent_id],
+            )?;
+            Ok(None)
+        }
         Rule::DstPort(port) => {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO dst_port (content, target, logic_group_id) VALUES (?, ?, ?);",
+                params![port.to_string(), target_id, parent_id],
+            )?;
+            Ok(None)
+        }
+        Rule::InPort(port) => {
+            tx.execute(
+                "INSERT INTO in_port (content, target, logic_group_id) VALUES (?, ?, ?);",
                 params![port.to_string(), target_id, parent_id],
             )?;
             Ok(None)
         }
 
         Rule::Match => {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO match (content, target, logic_group_id) VALUES ('MATCH', ?, ?);",
                 params![target_id, parent_id],
             )?;
@@ -240,7 +254,7 @@ pub fn insert_rule_with_target(
 
         Rule::DomainRegex(r) => {
             let regex = r.to_string();
-            conn.execute(
+            tx.execute(
                 "INSERT INTO domain_regex (content, target, logic_group_id) VALUES (?, ?, ?);",
                 params![regex, target_id, parent_id],
             )?;
@@ -358,7 +372,7 @@ pub fn load(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Vec<Strin
 
     Ok(rules_map)
 }
-/// add a normal rule
+/// add a normal rule, don't forget to call tx.commit()
 pub fn add_rule(
     tx: &rusqlite::Transaction,
     rule_table: &str,
@@ -555,9 +569,12 @@ fn test_sql() -> rusqlite::Result<()> {
         println!("add");
         let tx = conn.transaction()?;
 
-        add_rule(&tx, "DOMAIN", "example.com", "proxy")?;
-        add_rule(&tx, "DOMAIN", "test.com", "direct")?;
+        add_rule(&tx, "DOMAIN", "8example.com", "proxy")?;
+        add_rule(&tx, "DOMAIN", "8test.com", "direct")?;
         add_rule(&tx, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+        add_rule(&tx, SRC_PORT, "192/168/1/0/24", "proxy")?;
+
+        tx.commit()?;
     }
 
     println!("update");
@@ -621,15 +638,14 @@ fn merge_sql() -> rusqlite::Result<()> {
     {
         let mut conn = Connection::open("1.db")?;
         init_db(&conn)?;
-        add_rule(&conn.transaction().unwrap(), "DOMAIN", "test.com", "direct")?;
+        let tx = conn.transaction().unwrap();
+        add_rule(&tx, "DOMAIN", "test.com", "direct")?;
+        tx.commit()?;
         let mut conn = Connection::open("2.db")?;
         init_db(&conn)?;
-        add_rule(
-            &conn.transaction().unwrap(),
-            "IP-CIDR",
-            "192.168.1.0/24",
-            "proxy",
-        )?;
+        let tx = conn.transaction().unwrap();
+        add_rule(&tx, "IP-CIDR", "192.168.1.0/24", "proxy")?;
+        tx.commit()?;
     }
     let db1 = "1.db";
     let db2 = "2.db";
