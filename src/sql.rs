@@ -24,7 +24,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     for &rn in no_logic_rules {
         let tn = to_sql_table_name(rn);
 
-        let create_table_sql = format!(
+        let mut create_table_sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
@@ -35,22 +35,36 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             )",
             tn
         );
+        if rn == MATCH {
+            create_table_sql = create_table_sql.replace("content TEXT NOT NULL,\n", "");
+        }
         conn.execute(&create_table_sql, [])?;
 
-        let create_index_sql = format!("CREATE INDEX {}_index ON {} (content);", tn, tn);
-        conn.execute(&create_index_sql, [])?;
+        if rn != MATCH {
+            let create_index_sql = format!("CREATE INDEX {}_index ON {} (content);", tn, tn);
+            conn.execute(&create_index_sql, [])?;
+        }
     }
 
     // 创建 rules_view 视图
     let mut create_view_sql = "CREATE VIEW IF NOT EXISTS rules_view AS\n".to_string();
     let mut v = vec![];
     for &rn in no_logic_rules {
-        let s = format!(
-            "SELECT '{}' AS rule_name, content, target FROM {}",
-            rn,
-            to_sql_table_name(rn)
-        );
-        v.push(s);
+        if rn == MATCH {
+            let s = format!(
+                "SELECT '{}' AS rule_name, '' as content, target FROM {}",
+                rn,
+                to_sql_table_name(rn)
+            );
+            v.push(s);
+        } else {
+            let s = format!(
+                "SELECT '{}' AS rule_name, content, target FROM {}",
+                rn,
+                to_sql_table_name(rn)
+            );
+            v.push(s);
+        }
     }
     let s = v.join("\nUNION ALL\n");
     create_view_sql = create_view_sql + &s + ";";
@@ -260,12 +274,19 @@ pub fn save(
 
             for entry in entries {
                 if entry.len() < 2 {
-                    continue; // 确保 entry 格式正确：[内容, 目标标签]
-                }
-                let content = &entry[0];
-                let target = &entry[1];
+                    if entry.is_empty() {
+                        continue;
+                    } else {
+                        let target = &entry[0];
 
-                add_rule(&tx, &table_name, content, target)?;
+                        add_rule(&tx, &table_name, "", target)?;
+                    }
+                } else {
+                    let content = &entry[0];
+                    let target = &entry[1];
+
+                    add_rule(&tx, &table_name, content, target)?;
+                }
             }
         }
     }
@@ -284,6 +305,7 @@ pub fn load_logic_rules(conn: &Connection) -> rusqlite::Result<Vec<Rule>> {
         .map(|id| get_rule_from_logic_group(conn, id))
         .collect()
 }
+
 /// load normal rules
 pub fn load(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Vec<String>>>> {
     let mut rules_map: HashMap<String, Vec<Vec<String>>> = HashMap::new();
@@ -297,7 +319,22 @@ pub fn load(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<Vec<Strin
         .map(|r| r.unwrap())
         .collect();
 
+    let mut stmt = conn.prepare("SELECT target FROM match where target IS NOT NULL")?;
+    let match_target = stmt.query_row([], |row| {
+        let target: usize = row.get(0)?;
+        Ok(target)
+    });
+    if let Ok(match_target) = match_target {
+        rules_map
+            .entry(MATCH.to_string())
+            .or_default()
+            .push(vec![targets.get(&match_target).unwrap().to_string()]);
+    }
+
     for &rn in &RULE_TYPES[..RULE_TYPES.len() - 3] {
+        if rn == MATCH {
+            continue;
+        }
         let rule_name = to_sql_table_name(rn);
 
         let mut stmt = conn.prepare(&format!(
@@ -328,6 +365,7 @@ pub fn add_rule(
     content: &str,
     target: &str,
 ) -> rusqlite::Result<()> {
+    // for safty
     let rule_table = to_sql_table_name(rule_table);
     tx.execute(
         "INSERT INTO targets (target) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM targets WHERE target = ?);",
@@ -339,11 +377,20 @@ pub fn add_rule(
         |row| row.get(0),
     )?;
 
-    let query = format!(
-        "INSERT INTO {} (content, target) VALUES (?, ?);",
-        rule_table
-    );
-    tx.execute(&query, params![content, target_id])?;
+    if content.is_empty() {
+        if rule_table == "match" {
+            let query = format!("INSERT INTO {} (target) VALUES (?);", rule_table);
+            tx.execute(&query, params![target_id])?;
+        } else {
+            return Err(rusqlite::Error::InvalidColumnName(rule_table.to_string()));
+        }
+    } else {
+        let query = format!(
+            "INSERT INTO {} (content, target) VALUES (?, ?);",
+            rule_table
+        );
+        tx.execute(&query, params![content, target_id])?;
+    }
 
     Ok(())
 }
@@ -420,6 +467,9 @@ fn get_rule_from_logic_group(conn: &Connection, logic_group_id: i32) -> rusqlite
 
     let mut sub_rules = Vec::new();
     for &rn in &RULE_TYPES[..RULE_TYPES.len() - 3] {
+        if rn == MATCH {
+            continue;
+        }
         let rule_name = to_sql_table_name(rn);
         let mut stmt = conn.prepare(&format!(
             "SELECT content FROM {rule_name} WHERE logic_group_id = ?;"
