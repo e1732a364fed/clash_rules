@@ -116,6 +116,8 @@ pub fn load_rule_set_from_str(s: &str) -> Result<RuleSet, serde_yaml_ng::Error> 
 /// init like: let mut trie = Trie::new();
 ///
 /// will add items in payload that start with "+." which marks as DOMAIN-SUFFIX
+///
+/// and remove processed items from payload
 pub fn parse_rule_set_as_domain_suffix_trie(
     trie: &mut Trie<String, usize>,
     payload: &mut Vec<String>,
@@ -132,6 +134,22 @@ pub fn parse_rule_set_as_domain_suffix_trie(
 
         !is_suffix
     });
+}
+pub fn parse_rule_set_as_domain_regex_by_wildcard(
+    payload: &mut Vec<String>,
+    target: &str,
+) -> Vec<Vec<String>> {
+    let mut v = vec![];
+    payload.retain(|x| {
+        let is_wildcard = x.contains('*');
+        if is_wildcard {
+            let r = wildcard_to_regex_str(x);
+            v.push(vec![r, target.to_string()]);
+        }
+
+        !is_wildcard
+    });
+    v
 }
 
 /// init like let mut trie = PrefixMap::<Ipv4Net, usize>::new();
@@ -455,6 +473,60 @@ pub fn check_ip6_trie(trie: &PrefixMap<Ipv6Net, usize>, ip6: Ipv6Addr) -> Option
     trie.get_lpm(&Ipv6Net::new(ip6, 32).unwrap()).map(|r| *r.1)
 }
 
+pub fn wildcard_to_regex_str(pattern: &str) -> String {
+    let mut regex_pattern = String::from("^");
+
+    // `*` 只能匹配一级域名，且单独出现时匹配无 `.` 的主机名
+    if pattern == "*" {
+        regex_pattern.push_str(r"[^.]+$");
+    } else {
+        let parts: Vec<&str> = pattern.split('.').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if *part == "*" {
+                // `*` 只能匹配单级域名
+                regex_pattern.push_str(r"[^.]+");
+            } else {
+                regex_pattern.push_str(&regex::escape(part));
+            }
+
+            if i < parts.len() - 1 {
+                regex_pattern.push('.');
+            }
+        }
+        regex_pattern.push('$');
+    }
+
+    regex_pattern
+}
+pub fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
+    let regex_pattern = wildcard_to_regex_str(pattern);
+    regex::Regex::new(&regex_pattern)
+}
+
+/// cargo test test_wildcard -- --nocapture
+#[test]
+fn test_wildcard() -> Result<(), regex::Error> {
+    let patterns = ["*.baidu.com", "xxx.*.com", "1.*.2.*.com", "*", "google.com"];
+    let checker = [
+        ("ww.baidu.com", vec!["baidu.com"]),
+        ("xxx.1.com", vec!["xxx.com", "xxx.ab.cd.com"]),
+        ("1.ab.2.cd.com", vec!["1.ab.cd.2.com"]),
+        ("losdd", vec!["a.b", "a.b.c"]),
+        ("google.com", vec!["www.google.com"]),
+    ];
+
+    for (i, pattern) in patterns.iter().enumerate() {
+        let regex = wildcard_to_regex(pattern)?;
+        println!("Pattern: {:<20} => Regex: {}", pattern, regex);
+
+        let c = checker.get(i).unwrap();
+        assert!(regex.is_match(c.0));
+        c.1.iter().for_each(|d| assert!(!regex.is_match(d)));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn get_test_ips() -> Vec<(Ipv4Addr, Option<&'static str>)> {
     vec![
@@ -769,6 +841,10 @@ impl ClashRuleMatcher {
     ///
     /// If you want to merge classical ruleset, merge it as HashMap and
     /// use the merged HashMap to create the ClashRuleMatcher.
+    ///
+    /// Also any domain rules with wildcard must be treated early with
+    /// parse_rule_set_as_domain_regex_by_wildcard and insert into the
+    /// HashMap before initialize ClashRuleMatcher.
     pub fn append_rule_set(&mut self, t: RuleSetType, mut rs: RuleSet, target: &str) {
         match t {
             RuleSetType::Domain => {
@@ -789,7 +865,9 @@ impl ClashRuleMatcher {
                         l
                     });
                     rs.payload.iter().for_each(|d| {
-                        m.map.insert(d.to_string(), target_id);
+                        if !d.contains('*'){
+                            m.map.insert(d.to_string(), target_id);
+                        }
                     });
 
                     self.domain_full_matcher= Some(m);
