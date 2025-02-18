@@ -610,17 +610,22 @@ fn get_table_names(conn: &Connection) -> rusqlite::Result<Vec<String>> {
 pub fn merge_databases(db1_path: &str, db2_path: &str) -> rusqlite::Result<()> {
     let conn = Connection::open(db1_path)?;
 
-    // 连接第二个数据库
     conn.execute(
         &format!("ATTACH DATABASE '{}' AS attached_db", db2_path),
         [],
     )?;
 
-    // 获取 db2.sqlite 的所有表
-    let tables = get_table_names(&conn)?;
+    let mut tables = get_table_names(&conn)?;
+    tables.retain(|s| s != "logic_groups");
 
+    let sql ="INSERT INTO logic_groups (logic,target,parent_id) SELECT logic,target,parent_id FROM attached_db.logic_groups";
+    conn.execute(sql, [])?;
     for table in tables {
-        let sql = format!("INSERT INTO {table} SELECT * FROM attached_db.{table}");
+        let sql = if table == "targets" || table == "match" {
+            format!("INSERT INTO {table} (target) SELECT target FROM attached_db.{table}")
+        } else {
+            format!("INSERT INTO {table} (content,target,logic_group_id) SELECT content,target,logic_group_id FROM attached_db.{table}")
+        };
         conn.execute(&sql, [])?;
     }
 
@@ -635,6 +640,7 @@ pub fn merge_databases(db1_path: &str, db2_path: &str) -> rusqlite::Result<()> {
 fn merge_sql() -> rusqlite::Result<()> {
     let _ = std::fs::remove_file("1.db");
     let _ = std::fs::remove_file("2.db");
+    println!("init");
     {
         let mut conn = Connection::open("1.db")?;
         init_db(&conn)?;
@@ -650,6 +656,7 @@ fn merge_sql() -> rusqlite::Result<()> {
     let db1 = "1.db";
     let db2 = "2.db";
 
+    println!("merge");
     merge_databases(db1, db2)?;
 
     println!("Databases merged successfully!");
