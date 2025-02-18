@@ -527,6 +527,109 @@ fn test_wildcard() -> Result<(), regex::Error> {
     Ok(())
 }
 
+use std::collections::BTreeSet;
+
+#[derive(Debug)]
+pub struct PortMatcher {
+    ranges: Vec<(u16, u16)>,
+    single_ports: BTreeSet<u16>,
+}
+
+impl std::fmt::Display for PortMatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut parts = Vec::new();
+
+        for (start, end) in &self.ranges {
+            parts.push(format!("{}-{}", start, end));
+        }
+
+        for port in &self.single_ports {
+            parts.push(port.to_string());
+        }
+
+        write!(f, "{}", parts.join("/"))
+    }
+}
+
+impl PortMatcher {
+    /// 使用 - 来匹配端口范围，使用 / 或者 , 来区分多个端口/端口范围
+    ///
+    /// 示例:
+    /// 匹配 111 到 511 和 811 到 1911 端口，以及 65510 端口
+    /// 111-511/811-1911,65510
+    pub fn new(rule: &str) -> Self {
+        let mut ranges = Vec::new();
+        let mut single_ports = BTreeSet::new();
+
+        for part in rule.split(&['/', ','][..]) {
+            if let Some((start, end)) = part.split_once('-') {
+                if let (Ok(start), Ok(end)) = (start.parse::<u16>(), end.parse::<u16>()) {
+                    if start <= end {
+                        ranges.push((start, end));
+                    }
+                }
+            } else if let Ok(port) = part.parse::<u16>() {
+                single_ports.insert(port);
+            }
+        }
+
+        // 归并区间，合并重叠或相邻的范围
+        ranges.sort_unstable();
+        let mut merged_ranges: Vec<(u16, u16)> = Vec::new();
+        for (start, end) in ranges {
+            if let Some(last) = merged_ranges.last_mut() {
+                if last.1 >= start - 1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged_ranges.push((start, end));
+        }
+
+        Self {
+            ranges: merged_ranges,
+            single_ports,
+        }
+    }
+
+    pub fn matches(&self, port: u16) -> bool {
+        // 二分查找区间匹配
+        if self
+            .ranges
+            .binary_search_by(|&(s, e)| {
+                if e < port {
+                    std::cmp::Ordering::Less
+                } else if s > port {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .is_ok()
+        {
+            return true;
+        }
+
+        // 检查单个端口
+        self.single_ports.contains(&port)
+    }
+}
+
+/// cargo test test_port -- --nocapture
+#[test]
+fn test_port() {
+    let matcher = PortMatcher::new("114-514/810-1919,65530");
+
+    assert!(matcher.matches(114));
+    assert!(matcher.matches(514));
+    assert!(matcher.matches(900));
+    assert!(matcher.matches(65530));
+    assert!(!matcher.matches(515));
+    assert!(!matcher.matches(65531));
+
+    println!("All tests passed!");
+}
+
 #[cfg(test)]
 pub fn get_test_ips() -> Vec<(Ipv4Addr, Option<&'static str>)> {
     vec![
@@ -1013,7 +1116,7 @@ pub enum Rule {
     IpCidr6(Ipv6Net),
     GeoIp(String),
     Network(String),
-    DstPort(u16),
+    DstPort(PortMatcher),
     ProcessName(String),
     Match,
     Other(String, String),
@@ -1043,7 +1146,7 @@ impl Rule {
             MATCH => Rule::Match,
             PROCESS_NAME => Rule::ProcessName(r.to_string()),
             NETWORK => Rule::Network(r.to_string()),
-            DST_PORT => Rule::DstPort(r.parse()?),
+            DST_PORT => Rule::DstPort(PortMatcher::new(r)),
             DOMAIN_SUFFIX => Rule::DomainSuffix(r.to_string()),
             DOMAIN_KEYWORD => Rule::DomainKeyword(r.to_string()),
             DOMAIN_REGEX => Rule::DomainRegex(regex::Regex::new(r)?),
@@ -1121,7 +1224,7 @@ impl Rule {
                     false
                 }
             }),
-            Rule::DstPort(d) => input.dst_port.is_some_and(|rd| rd == *d),
+            Rule::DstPort(pm) => input.dst_port.is_some_and(|rd| pm.matches(rd)),
             _ => false,
         }
     }

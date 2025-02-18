@@ -217,7 +217,7 @@ pub fn insert_rule_with_target(
         Rule::DstPort(port) => {
             conn.execute(
                 "INSERT INTO dst_port (content, target, logic_group_id) VALUES (?, ?, ?);",
-                params![port, target_id, parent_id],
+                params![port.to_string(), target_id, parent_id],
             )?;
             Ok(None)
         }
