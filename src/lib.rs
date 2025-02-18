@@ -115,21 +115,22 @@ pub fn load_rule_set_from_str(s: &str) -> Result<RuleSet, serde_yaml_ng::Error> 
 
 /// init like: let mut trie = Trie::new();
 ///
-/// will add items in payload that start with '+' which marks as DOMAIN-SUFFIX
+/// will add items in payload that start with "+." which marks as DOMAIN-SUFFIX
 pub fn parse_rule_set_as_domain_suffix_trie(
     trie: &mut Trie<String, usize>,
     payload: &mut Vec<String>,
     target_id: usize,
 ) {
     payload.retain(|x| {
-        let ok = x.starts_with('+');
-        if ok {
-            let mut r: String = x.chars().rev().collect();
-            r = r.trim_end_matches('+').to_string();
+        const PRE: &str = "+.";
+        let is_suffix = x.starts_with(PRE);
+        if is_suffix {
+            let x = x.trim_start_matches(PRE);
+            let r: String = x.chars().rev().collect();
             trie.insert(r, target_id);
         }
 
-        !ok
+        !is_suffix
     });
 }
 
@@ -610,7 +611,6 @@ impl Ip6Matcher {
 /// init mmdb_reader using maxminddb::Reader::from_source
 #[derive(Debug, Default)]
 pub struct ClashRuleMatcher {
-    // pub domain_target_map: Option<HashMap<String, String>>,
     pub domain_full_matcher: Option<DomainFullMatcher>,
     pub domain_keyword_matcher: Option<DomainKeywordMatcher>,
     pub domain_suffix_matcher: Option<DomainSuffixMatcher>,
