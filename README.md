@@ -11,5 +11,7 @@ There's a convenient struct `ClashRuleMatcher` and an enum `Rule`.
 Also has feature to load and save to sqlite.
 
 Supported rules are:
-RULE-SET, AND, OR, NOT, DOMAIN, DOMAIN-KEYWORD, DOMAIN-SUFFIX, DOMAIN-REGEX,
+RULE-SET, GEOSITE, AND, OR, NOT, DOMAIN, DOMAIN-KEYWORD, DOMAIN-SUFFIX, DOMAIN-REGEX,
 IP-CIDR, IP-CIDR6, GEOIP, PROCESS-NAME, NETWORK, DST-PORT, SRC-PORT, IN-PORT, MATCH
+
+Use external crate geosite-rs to support GEOSITE.

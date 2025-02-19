@@ -549,7 +549,13 @@ fn test_sql() -> rusqlite::Result<()> {
         "AND,((OR,((DOMAIN-KEYWORD,bili),(DOMAIN,0))),(DOMAIN-REGEX,(?i)pcdn|mcdn)),direct"
             .to_string();
     let rc = RuleConfig {
-        rules: vec![rule_str1, rule_str2, rule_str3],
+        rules: vec![
+            rule_str1,
+            rule_str2,
+            rule_str3,
+            "GEOSITE,t1,t2".to_string(),
+            "RULE-SET,file1,target".to_string(),
+        ],
     };
     let h2 = parse_rules(&rc);
     println!("{h2:?}");

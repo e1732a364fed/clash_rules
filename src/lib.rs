@@ -22,6 +22,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 pub const RULE_SET: &str = "RULE-SET";
+pub const GEOSITE: &str = "GEOSITE";
+
 pub const DOMAIN: &str = "DOMAIN";
 pub const DOMAIN_SUFFIX: &str = "DOMAIN-SUFFIX";
 pub const DOMAIN_KEYWORD: &str = "DOMAIN-KEYWORD";
@@ -39,8 +41,10 @@ pub const OR: &str = "OR";
 pub const NOT: &str = "NOT";
 pub const MATCH: &str = "MATCH";
 
-/// all supported rules (without RULE-SET)
+/// all supported rules
 pub const RULE_TYPES: &[&str] = &[
+    GEOSITE,
+    RULE_SET,
     DOMAIN,
     DOMAIN_KEYWORD,
     DOMAIN_SUFFIX,
@@ -244,6 +248,22 @@ pub fn merge_method_rules_map(
     }
 
     merged_map
+}
+
+pub fn extract_geosite_country_code_target_map(
+    method_rules_map: &mut HashMap<String, Vec<Vec<String>>>,
+) -> Option<HashMap<String, String>> {
+    method_rules_map.remove(GEOSITE).map(|vv| {
+        let mut m = HashMap::new();
+
+        for mut v in vv {
+            let t = v.pop().unwrap();
+            let cc = v.pop().unwrap();
+            m.insert(cc, t);
+        }
+
+        m
+    })
 }
 
 /// for DOMAIN, PROCESS-NAME etc. that matches directly
@@ -814,7 +834,13 @@ impl Ip6Matcher {
 }
 
 /// Convenient struct for checking all rules.
+///
 /// init mmdb_reader using maxminddb::Reader::from_source
+///
+///
+/// To support GEOSITE, use extract_geosite_country_code_target_map and
+/// external crate geosite-rs to generate a HashMap from geosite, them merge the HashMap,
+/// and use the merged HashMap to init ClashRuleMatcher.
 #[derive(Debug, Default)]
 pub struct ClashRuleMatcher {
     pub domain_full_matcher: Option<DomainFullMatcher>,
@@ -833,7 +859,7 @@ pub struct ClashRuleMatcher {
     pub country_target_map: Option<HashMap<String, String>>,
 
     /// stores un-optimized left rules, which are AND,OR,NOT,PROCESS-NAME,
-    /// DST-PORT, NETWORK,MATCH
+    /// DST-PORT, SRC-PORT, IN-PORT, NETWORK, MATCH
     ///
     /// (rule, target)
     pub rules: Vec<(Rule, String)>,
